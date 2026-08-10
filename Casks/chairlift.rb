@@ -2,10 +2,11 @@ cask "chairlift" do
   arch arm: "arm64", intel: "amd64"
   os linux: "linux"
 
-  version "1.0.0-dev"
-  sha256 :no_check
+  version "0.10.1"
+  sha256 arm: "7f91a1dca3a39fab4df3a40d54da228a6f9d167d7ddddc9457c541537180f0fb",
+         intel: "1cbce1da11984372105865e58bdb981e4e1e1a94652d877c7fd608d3e45eb0c5"
 
-  url "https://github.com/frostyard/chairlift/releases/download/dev/chairlift_#{version}_linux_#{arch}.tar.gz"
+  url "https://github.com/frostyard/chairlift/releases/download/v#{version}/chairlift_#{version}_linux_#{arch}.tar.gz"
   name "ChairLift"
   desc "System management tool for bootc-based installations"
   homepage "https://github.com/frostyard/chairlift"
