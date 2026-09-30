@@ -27,17 +27,16 @@ cask "chairlift" do
   artifact "data/icons/hicolor/symbolic/apps/org.frostyard.ChairLift-symbolic.svg",
            target: "#{Dir.home}/.local/share/icons/hicolor/symbolic/apps/org.frostyard.ChairLift-symbolic.svg"
 
-  preflight do
-    FileUtils.mkdir_p "#{Dir.home}/.local/share/applications"
-    FileUtils.mkdir_p "#{Dir.home}/.local/share/icons/hicolor/scalable/apps"
-    FileUtils.mkdir_p "#{Dir.home}/.local/share/icons/hicolor/symbolic/apps"
+  preflight_steps do
+    mkdir_p ".local/share/applications", base: :home
+    mkdir_p ".local/share/icons/hicolor/scalable/apps", base: :home
+    mkdir_p ".local/share/icons/hicolor/symbolic/apps", base: :home
 
     # Point the menu entry at the brew-managed wrapper so the app inherits
     # the Homebrew environment even when the session PATH lacks brew.
-    desktop_file = "#{staged_path}/data/org.frostyard.ChairLift.desktop"
-    content = File.read(desktop_file)
-    content.gsub!(/^Exec=.*/, "Exec=#{HOMEBREW_PREFIX}/bin/chairlift-wrapper")
-    File.write(desktop_file, content)
+    inreplace "data/org.frostyard.ChairLift.desktop",
+              /^Exec=.*/,
+              "Exec={{HOMEBREW_PREFIX}}/bin/chairlift-wrapper"
   end
 
   # chairlift-updex-helper is intentionally not linked: it requires polkit
