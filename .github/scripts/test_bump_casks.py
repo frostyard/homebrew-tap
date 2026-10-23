@@ -49,7 +49,7 @@ class FakeGh:
         self.calls: list[tuple[str, ...]] = []
         self.created_prs: list[dict] = []
         self.open_prs: dict[str, str] = {}
-        self.attested: list[str] = []
+        self.attested: list[tuple[str, str]] = []
 
     def release(self, slug: str, tag: str | None = None) -> dict | None:
         """Return the fixture payload for a slug and tag."""
@@ -63,12 +63,12 @@ class FakeGh:
         path.write_bytes(self.blobs[name])
         return path
 
-    def verify_attestation(self, path: Path, slug: str) -> None:
+    def verify_attestation(self, path: Path, slug: str, tag: str) -> None:
         """Accept the attestation unless the fixture names this asset."""
-        self.calls.append(("attest", slug, path.name))
+        self.calls.append(("attest", slug, path.name, tag))
         if path.name in self.fail_attestation:
             raise bc.BumpError(f"build attestation of {path.name} does not verify: no attestation found")
-        self.attested.append(path.name)
+        self.attested.append((path.name, tag))
 
     def create_pr(self, slug: str, base: str, head: str, title: str, body: str) -> str:
         """Record the PR that the script would open."""
@@ -489,6 +489,7 @@ class PullRequestTests(BumpTestCase):
         self.assertEqual(pr["head"], "bump/chairlift-0.11.2")
         self.assertEqual(pr["title"], "fix(cask): bump chairlift to v0.11.2")
         self.assertIn("0.10.1", pr["body"])
+        self.assertIn(("attest", "frostyard/chairlift", "chairlift_0.11.2_linux_amd64.tar.gz", "v0.11.2"), gh.calls)
         joined = [" ".join(call) for call in git.calls]
         self.assertTrue(any("push --set-upstream origin bump/chairlift-0.11.2" in call for call in joined))
         pushes = [call for call in joined if call.startswith("push")]
@@ -519,15 +520,10 @@ class PullRequestTests(BumpTestCase):
         # The tap returns to the start ref after each item.
         self.assertEqual(git.calls.count(("checkout", "--force", "main")), 2)
         self.assertEqual(git.calls.count(("reset", "--hard", "main")), 2)
-        self.assertLess(
-            git.calls.index(("checkout", "--force", "main")),
-            git.calls.index(("checkout", "-B", "bump/beta-0.2.0", "main")),
-        )
+        self.assertLess(git.calls.index(("checkout", "--force", "main")), git.calls.index(("checkout", "-B", "bump/beta-0.2.0", "main")))
 
         # Each commit stages and commits only its own file.
-        self.assertEqual(
-            [call for call in git.calls if call[0] == "add"], [("add", "Casks/alpha.rb"), ("add", "Casks/beta.rb")]
-        )
+        self.assertEqual([call for call in git.calls if call[0] == "add"], [("add", "Casks/alpha.rb"), ("add", "Casks/beta.rb")])
         for name in ("alpha", "beta"):
             index = git.calls.index(("add", f"Casks/{name}.rb"))
             self.assertEqual(git.calls[index + 1], ("commit", "-m", f"fix(cask): bump {name} to v0.2.0"))
@@ -567,6 +563,42 @@ class PullRequestTests(BumpTestCase):
         self.assertIn("`chairlift` | current", table)
         self.assertIn("`nsl` | release-hook", table)
         self.assertNotIn("| error |", table)
+
+
+class GhClientTests(BumpTestCase):
+    """The gh layer builds the exact verification command."""
+
+    def test_attestation_is_pinned_to_the_release_tag(self) -> None:
+        calls: list[list[str]] = []
+        gh = bc.GhClient(runner=lambda argv: calls.append(argv) or "")
+        path = self.tap / "asset.tar.gz"
+        path.write_bytes(b"x")
+        gh.verify_attestation(path, "frostyard/chairlift", "v0.11.2")
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(path),
+                    "--repo",
+                    "frostyard/chairlift",
+                    "--source-ref",
+                    "refs/tags/v0.11.2",
+                ]
+            ],
+        )
+
+    def test_attestation_failure_raises_bump_error(self) -> None:
+        def runner(_argv: list[str]) -> str:
+            raise RuntimeError("no attestations found")
+
+        path = self.tap / "asset.tar.gz"
+        path.write_bytes(b"x")
+        with self.assertRaises(bc.BumpError) as raised:
+            bc.GhClient(runner=runner).verify_attestation(path, "frostyard/chairlift", "v0.11.2")
+        self.assertIn("attestation", str(raised.exception))
 
 
 if __name__ == "__main__":

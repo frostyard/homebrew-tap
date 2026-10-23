@@ -9,7 +9,7 @@ For every file in ``Casks/*.rb`` and ``Formula/*.rb`` the script:
 4. asks the GitHub API for the latest release,
 5. maps every sha256 in the file to an asset of the *old* release by digest,
 6. downloads and verifies each new asset (digest, ``checksums.txt``, build
-   attestation),
+   attestation of an artifact built from the release tag),
 7. checks that every literal ``binary``/``artifact`` path exists in the
    tarball (casks only),
 8. rewrites the file and runs ``brew style`` on it,
@@ -176,10 +176,12 @@ class GhClient:
             ]
         ).strip()
 
-    def verify_attestation(self, path: Path, slug: str) -> None:
-        """Raise ``BumpError`` unless ``gh attestation verify`` exits 0."""
+    def verify_attestation(self, path: Path, slug: str, tag: str) -> None:
+        """Raise ``BumpError`` unless the attestation of ``path`` comes from ``tag``."""
         try:
-            self._runner(["gh", "attestation", "verify", str(path), "--repo", slug])
+            self._runner(
+                ["gh", "attestation", "verify", str(path), "--repo", slug, "--source-ref", f"refs/tags/{tag}"]
+            )
         except RuntimeError as error:
             raise BumpError(f"build attestation of {path.name} does not verify: {error}") from error
 
@@ -349,7 +351,7 @@ def verify_asset(
             raise BumpError(f"checksums.txt of {tag} has no line for {name}")
         if listed != expected_sha:
             raise BumpError(f"checksums.txt lists {listed} for {name}, release digest is {expected_sha}")
-    bumper.gh.verify_attestation(path, slug)
+    bumper.gh.verify_attestation(path, slug, tag)
     return path
 
 
@@ -546,7 +548,8 @@ def pr_body(item: str, kind: str, old_version: str, new_version: str, hash_map: 
         "Every new asset was verified before this PR was opened:\n\n"
         "1. the sha256 computed from the downloaded asset equals the asset's GitHub release digest,\n"
         "2. the value equals the line for the asset in the release's `checksums.txt`,\n"
-        "3. `gh attestation verify` accepts the asset's build provenance.\n\n"
+        "3. `gh attestation verify --source-ref refs/tags/<tag>` accepts the asset's build "
+        "provenance, so the asset must come from this release's tag.\n\n"
         "| Old sha256 | New sha256 |\n| --- | --- |\n"
         f"{rows}\n\n"
         "Opened by `.github/workflows/bump.yml` (`.github/scripts/bump_casks.py`). "
