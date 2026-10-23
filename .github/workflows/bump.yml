@@ -1,48 +1,67 @@
 name: Homebrew Bump
 
 on:
+  schedule:
+    - cron: "0 3 * * *" # daily at 03:00 UTC
   workflow_dispatch:
-  # schedule:
-  #   - cron: "0 3 * * *" # daily at 03:00 UTC
+    inputs:
+      dry_run:
+        description: "Verify every stale item but push nothing and open no pull request"
+        type: boolean
+        default: false
+      base_ref:
+        description: "Branch whose casks and formulae are checked, and the base of the pull requests"
+        type: string
+        default: main
+
+permissions: {}
+
+concurrency:
+  group: homebrew-bump
+  cancel-in-progress: false
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
-
     steps:
-      - name: Install Homebrew if missing
-        run: |
-          if ! /home/linuxbrew/.linuxbrew/bin/brew --version >/dev/null 2>&1; then
-            echo "Homebrew not found, installing..."
-            NONINTERACTIVE=1 /bin/bash -c \
-              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      # setup-homebrew replaces GITHUB_WORKSPACE for a tap repository (it moves
+      # its tap clone there), so it must run before any checkout.
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@0fdc2c96a16d9f945f7e1577784302fd27a549a9 # main
 
-              eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+      - name: Check out the workflow
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          persist-credentials: false
 
-              brew tap --force ${{ github.repository }}
-
-              { echo "HOMEBREW_PREFIX=$HOMEBREW_PREFIX", 
-                echo "HOMEBREW_CELLAR=$HOMEBREW_CELLAR", 
-                echo "HOMEBREW_REPOSITORY=$HOMEBREW_REPOSITORY", 
-                echo "PATH=$PATH", 
-                echo "MANPATH=$MANPATH", 
-                echo "INFOPATH=$INFOPATH"
-              } >> "$GITHUB_ENV"
-          else
-            echo "Homebrew already installed"
-          fi
+      - name: Check out the tap
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.base_ref || 'main' }}
+          path: tap
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure git
-        uses: Homebrew/actions/git-user-config@main
-        with:
-          username: lambdaclan
-
-      - name: Bump packages
         env:
-          HOMEBREW_DEVELOPER: 1
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          brew bump --tap ${{ github.repository }} --open-pr --no-fork
+          gh auth setup-git
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump casks and formulae
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BASE_REF: ${{ inputs.base_ref || 'main' }}
+        run: |
+          args=(--tap-dir tap --base-ref "$BASE_REF")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .github/scripts/bump_casks.py "${args[@]}"
