@@ -91,6 +91,8 @@ class FakeGit:
     def __call__(self, argv: list[str], cwd: Path) -> str:
         """Record a git call; fail ``ls-remote`` for an absent branch."""
         self.calls.append(tuple(argv))
+        if argv[:2] == ["rev-parse", "--abbrev-ref"]:
+            return "main\n"
         if argv[:3] == ["ls-remote", "--exit-code", "--heads"]:
             if argv[-1] not in self.branches:
                 raise RuntimeError(f"branch {argv[-1]} not found")
@@ -113,6 +115,19 @@ CHAIRLIFT_TEMPLATE = """cask "chairlift" do
   binary "chairlift"
   artifact "data/org.frostyard.ChairLift.desktop",
            target: "#{{Dir.home}}/.local/share/applications/org.frostyard.ChairLift.desktop"
+end
+"""
+
+GENERIC_TEMPLATE = """cask "{name}" do
+  arch arm: "arm64", intel: "amd64"
+
+  version "{version}"
+  sha256 arm64_linux:  "{arm64}",
+         x86_64_linux: "{amd64}"
+
+  url "https://github.com/frostyard/{name}/releases/download/v#{{version}}/{name}_#{{version}}_linux_#{{arch}}.tar.gz"
+
+  binary "{name}"
 end
 """
 
@@ -172,6 +187,41 @@ class BumpTestCase(unittest.TestCase):
             style=lambda path: None,
             git=git or FakeGit(),
         )
+
+    def generic_fixture(self, name: str, old_version: str, new_version: str):
+        """Build a cask, its old release and its new release for any name."""
+        old_amd64 = make_tarball({name: b"old-amd64"})
+        old_arm64 = make_tarball({name: b"old-arm64"})
+        new_amd64 = make_tarball({name: b"new-amd64"})
+        new_arm64 = make_tarball({name: b"new-arm64"})
+        text = GENERIC_TEMPLATE.format(
+            name=name,
+            version=old_version,
+            amd64=digest(old_amd64).split(":")[1],
+            arm64=digest(old_arm64).split(":")[1],
+        )
+        slug = f"frostyard/{name}"
+        releases = {
+            (slug, None): {
+                "tag_name": f"v{new_version}",
+                "assets": [
+                    asset(f"{name}_{new_version}_linux_amd64.tar.gz", new_amd64),
+                    asset(f"{name}_{new_version}_linux_arm64.tar.gz", new_arm64),
+                ],
+            },
+            (slug, f"v{old_version}"): {
+                "tag_name": f"v{old_version}",
+                "assets": [
+                    asset(f"{name}_{old_version}_linux_amd64.tar.gz", old_amd64),
+                    asset(f"{name}_{old_version}_linux_arm64.tar.gz", old_arm64),
+                ],
+            },
+        }
+        blobs = {
+            f"{name}_{new_version}_linux_amd64.tar.gz": new_amd64,
+            f"{name}_{new_version}_linux_arm64.tar.gz": new_arm64,
+        }
+        return text, releases, blobs
 
     def chairlift_fixture(self, old_version: str, new_version: str):
         """Build a chairlift-style cask plus matching old and new releases."""
@@ -336,7 +386,8 @@ class StaleCaskTests(BumpTestCase):
         result = self.run_item(self.bumper(gh, git=git), path, "formula")
         self.assertEqual(result.status, "verified")
         self.assertEqual((result.current, result.latest), ("0.9.0", "0.10.0"))
-        self.assertIn(("checkout", "--", "Formula/tool.rb"), git.calls)
+        self.assertIn(("checkout", "--force", "main"), git.calls)
+        self.assertIn(("reset", "--hard", "main"), git.calls)
 
 
 class FailureTests(BumpTestCase):
@@ -440,7 +491,47 @@ class PullRequestTests(BumpTestCase):
         self.assertIn("0.10.1", pr["body"])
         joined = [" ".join(call) for call in git.calls]
         self.assertTrue(any("push --set-upstream origin bump/chairlift-0.11.2" in call for call in joined))
-        self.assertFalse(any("--force" in call for call in joined))
+        pushes = [call for call in joined if call.startswith("push")]
+        self.assertEqual(len(pushes), 1)
+        self.assertNotIn("--force", pushes[0])
+
+    def test_two_stale_items_branch_from_the_start_ref(self) -> None:
+        releases: dict = {}
+        blobs: dict = {}
+        paths = {}
+        for name in ("alpha", "beta"):
+            text, item_releases, item_blobs = self.generic_fixture(name, "0.1.0", "0.2.0")
+            paths[name] = self.write(name, text)
+            releases.update(item_releases)
+            blobs.update(item_blobs)
+        gh = FakeGh(releases, blobs)
+        git = FakeGit()
+        bumper = self.bumper(gh, dry_run=False, git=git)
+        first = self.run_item(bumper, paths["alpha"], "cask")
+        second = self.run_item(bumper, paths["beta"], "cask")
+        self.assertEqual((first.status, second.status), ("bumped", "bumped"))
+
+        # Both branches start at the tap's starting ref, not at the other branch.
+        self.assertIn(("checkout", "-B", "bump/alpha-0.2.0", "main"), git.calls)
+        self.assertIn(("checkout", "-B", "bump/beta-0.2.0", "main"), git.calls)
+        self.assertEqual([call for call in git.calls if call[0] == "rev-parse"], [("rev-parse", "--abbrev-ref", "HEAD")])
+
+        # The tap returns to the start ref after each item.
+        self.assertEqual(git.calls.count(("checkout", "--force", "main")), 2)
+        self.assertEqual(git.calls.count(("reset", "--hard", "main")), 2)
+        self.assertLess(
+            git.calls.index(("checkout", "--force", "main")),
+            git.calls.index(("checkout", "-B", "bump/beta-0.2.0", "main")),
+        )
+
+        # Each commit stages and commits only its own file.
+        self.assertEqual(
+            [call for call in git.calls if call[0] == "add"], [("add", "Casks/alpha.rb"), ("add", "Casks/beta.rb")]
+        )
+        for name in ("alpha", "beta"):
+            index = git.calls.index(("add", f"Casks/{name}.rb"))
+            self.assertEqual(git.calls[index + 1], ("commit", "-m", f"fix(cask): bump {name} to v0.2.0"))
+        self.assertEqual([pr["head"] for pr in gh.created_prs], ["bump/alpha-0.2.0", "bump/beta-0.2.0"])
 
     def test_existing_branch_is_pr_exists_and_opens_nothing(self) -> None:
         text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")

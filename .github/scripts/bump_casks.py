@@ -240,6 +240,7 @@ class Bumper:
     tap_slug: str = TAP_SLUG
     style: Callable[[Path], None] = brew_style
     git: Callable[[list[str], Path], str] = _git
+    start_ref: str = ""
 
 
 def source_slug(text: str) -> str | None:
@@ -365,6 +366,25 @@ def fetch_checksums(bumper: Bumper, slug: str, tag: str, assets: Mapping[str, Ma
     return table
 
 
+def tap_start_ref(bumper: Bumper) -> str:
+    """Return the tap's ref at the start of the run, resolved once."""
+    if bumper.start_ref:
+        return bumper.start_ref
+    head = bumper.git(["rev-parse", "--abbrev-ref", "HEAD"], bumper.tap_dir).strip()
+    if head and head != "HEAD":
+        bumper.start_ref = head
+    else:
+        bumper.start_ref = bumper.git(["rev-parse", "HEAD"], bumper.tap_dir).strip()
+    return bumper.start_ref
+
+
+def restore_tap(bumper: Bumper) -> None:
+    """Return the tap to its starting ref with a clean work tree."""
+    start = tap_start_ref(bumper)
+    bumper.git(["checkout", "--force", start], bumper.tap_dir)
+    bumper.git(["reset", "--hard", start], bumper.tap_dir)
+
+
 def branch_exists(bumper: Bumper, branch: str) -> bool:
     """Report whether ``branch`` exists on the remote."""
     try:
@@ -454,10 +474,10 @@ def bump_item(bumper: Bumper, path: Path, kind: str) -> ItemResult:
             )
         )
         print(diff, end="")
-        bumper.git(["checkout", "--", str(path.relative_to(bumper.tap_dir))], bumper.tap_dir)
+        restore_tap(bumper)
         return ItemResult(item=item, status="verified", current=version, latest=latest, detail="dry run; file restored")
 
-    return publish(bumper, path, kind, item, version, latest, hash_map, text)
+    return publish(bumper, path, kind, item, version, latest, hash_map)
 
 
 def publish(
@@ -468,30 +488,36 @@ def publish(
     old_version: str,
     new_version: str,
     hash_map: Mapping[str, str],
-    original: str,
 ) -> ItemResult:
-    """Commit the edited file on a bump branch, push it, and open one PR."""
+    """Commit the edited file on a bump branch, push it, and open one PR.
+
+    Every bump branch starts at the tap's starting ref, never at another item's
+    bump branch, and the tap is back on that ref with a clean work tree before
+    the function returns — on success, on a push failure and on a PR failure.
+    """
     branch = f"bump/{item}-{new_version}"
-    relative = path.relative_to(bumper.tap_dir)
+    relative = str(path.relative_to(bumper.tap_dir))
+    start = tap_start_ref(bumper)
     if branch_exists(bumper, branch) or bumper.gh.open_pr(bumper.tap_slug, branch):
-        bumper.git(["checkout", "--", str(relative)], bumper.tap_dir)
+        restore_tap(bumper)
         return ItemResult(item=item, status="pr-exists", current=old_version, latest=new_version, detail=branch)
 
     prefix = "fix(cask)" if kind == "cask" else "fix(formula)"
     subject = f"{prefix}: bump {item} to v{new_version}"
     try:
-        bumper.git(["checkout", "-B", branch], bumper.tap_dir)
-        bumper.git(["add", str(relative)], bumper.tap_dir)
+        bumper.git(["checkout", "-B", branch, start], bumper.tap_dir)
+        bumper.git(["add", relative], bumper.tap_dir)
         bumper.git(["commit", "-m", subject], bumper.tap_dir)
         bumper.git(["push", "--set-upstream", "origin", branch], bumper.tap_dir)
     except RuntimeError as error:
-        path.write_text(original, encoding="utf-8")
+        restore_tap(bumper)
         raise BumpError(f"cannot push {branch}: {error}") from error
 
     body = pr_body(item, kind, old_version, new_version, hash_map)
     try:
         url = bumper.gh.create_pr(bumper.tap_slug, bumper.base_ref, branch, subject, body)
     except RuntimeError as error:
+        restore_tap(bumper)
         return ItemResult(
             item=item,
             status="pr-failed",
@@ -502,6 +528,7 @@ def publish(
                 "Brian: allow GitHub Actions to create pull requests"
             ),
         )
+    restore_tap(bumper)
     return ItemResult(
         item=item,
         status="bumped",
