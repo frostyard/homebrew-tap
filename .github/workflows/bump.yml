@@ -31,7 +31,7 @@ jobs:
       # setup-homebrew replaces GITHUB_WORKSPACE for a tap repository (it moves
       # its tap clone there), so it must run before any checkout.
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@0fdc2c96a16d9f945f7e1577784302fd27a549a9 # main
+        uses: Homebrew/actions/setup-homebrew@4790763c0a3ba4036f72634dc079c4a7dfcd4878 # 2026.10.19.1
 
       - name: Check out the workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
