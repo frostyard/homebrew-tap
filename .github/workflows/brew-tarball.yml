@@ -10,6 +10,13 @@ on:
 
 permissions: {}
 
+# Explicit bash runs every step with -eo pipefail. Without it, GitHub runs
+# `bash -e` with no pipefail, so `cmd | tee` takes tee's status and a
+# failed command passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   create_release:
     name: Create Release
@@ -70,12 +77,12 @@ jobs:
               /bin/sh -c "
               set -o xtrace
               apk add curl git zstd posix-libc-utils uutils gnutar grep
-              curl --retry 3 -Lo /tmp/brew-install https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+              curl --retry 3 -Lo /tmp/brew-install https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh || exit 1
               chmod +x /tmp/brew-install
               touch /.dockerenv
               ln -s /bin/bash /usr/bin/bash
               ls -s /usr/bin/grep /bin/grep
-              env --ignore-environment PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/home/linuxbrew NONINTERACTIVE=1 /usr/bin/bash /tmp/brew-install
+              env --ignore-environment PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/home/linuxbrew NONINTERACTIVE=1 /usr/bin/bash /tmp/brew-install || exit 1
               tar --zstd -cvf /outdir/$TARBALL_FILENAME /home/linuxbrew/.linuxbrew"
 
           mkdir -p "$SHASUM_DIR"

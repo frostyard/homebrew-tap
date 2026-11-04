@@ -16,6 +16,13 @@ on:
 
 permissions: {}
 
+# Explicit bash runs every step with -eo pipefail. Without it, GitHub runs
+# `bash -e` with no pipefail, so `cmd | tee` takes tee's status and a
+# failed command passes.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: homebrew-bump
   cancel-in-progress: false
