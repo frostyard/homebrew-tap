@@ -31,25 +31,32 @@ def check_defaults(text):
 
 
 def check_shell_lines(text):
-    """Require every workflow shell setting to use bash exactly."""
-    shell_pattern = re.compile(r"^\s*shell:")
+    """Reject shell overrides; the only accepted spelling is ``shell: bash``.
 
-    for line in text.splitlines():
+    Shell settings may appear at step level or in inline YAML. Any other
+    spelling, including quoted keys and shell arguments, is reported by line.
+    """
+    shell_pattern = re.compile(r'''(^|[\s{,-])["']?shell["']?\s*:''')
+    allowed = re.compile(r"\s*(-\s+)?shell:\s*bash\s*")
+    bad_lines = []
+
+    for line_number, line in enumerate(text.splitlines(), start=1):
         stripped = line.lstrip()
         if not stripped or stripped.startswith("#"):
             continue
-        if shell_pattern.match(line):
-            if stripped != "shell: bash":
-                return False
+        if shell_pattern.search(line) and allowed.fullmatch(line) is None:
+            bad_lines.append((line_number, line))
 
-    return True
+    return bad_lines
 
 
 class WorkflowShellTests(unittest.TestCase):
     def test_repository_workflows(self):
         workflow_dir = Path(__file__).resolve().parent.parent / "workflows"
 
-        workflows = sorted(workflow_dir.glob("*.yml"))
+        workflows = sorted(
+            set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml"))
+        )
         # An empty list would pass every check: require the known workflows.
         names = {workflow.name for workflow in workflows}
         for required in ("brew-tarball.yml", "bump.yml", "publish.yml", "tests.yml"):
@@ -59,7 +66,13 @@ class WorkflowShellTests(unittest.TestCase):
             text = workflow.read_text(encoding="utf-8")
             with self.subTest(workflow=workflow.name):
                 self.assertTrue(check_defaults(text), "missing top-level defaults.run.shell: bash")
-                self.assertTrue(check_shell_lines(text), "shell setting is not exactly bash")
+                bad_shell_lines = check_shell_lines(text)
+                self.assertEqual(
+                    bad_shell_lines,
+                    [],
+                    "shell settings must use only 'shell: bash'; bad lines: "
+                    + "; ".join(f"{number}: {line}" for number, line in bad_shell_lines),
+                )
 
     def test_old_brew_tarball_fixture_fails_defaults_check(self):
         old_text = '''name: Generate Homebrew Tarball and Release
@@ -81,7 +94,59 @@ jobs:
       - run: echo test
         shell: sh
 '''
-        self.assertFalse(check_shell_lines(text))
+        self.assertNotEqual(check_shell_lines(text), [])
+
+    def test_shell_override_fixtures_fail_closed(self):
+        fixtures = {
+            "shell first key": """jobs:
+  build:
+    steps:
+      - shell: sh
+        run: echo test
+""",
+            "single quoted shell key": """jobs:
+  build:
+    steps:
+      - run: echo test
+        'shell': sh
+""",
+            "double quoted shell key": """jobs:
+  build:
+    steps:
+      - run: echo test
+        "shell": sh
+""",
+            "inline job default": """jobs:
+  build:
+    defaults: {run: {shell: sh}}
+""",
+            "shell arguments": """jobs:
+  build:
+    steps:
+      - run: echo test
+        shell: bash -e {0}
+""",
+        }
+
+        for name, text in fixtures.items():
+            with self.subTest(fixture=name):
+                bad_lines = check_shell_lines(text)
+                self.assertNotEqual(
+                    bad_lines,
+                    [],
+                    "fixture must fail: bad shell line was not detected",
+                )
+
+    def test_bash_shell_fixture_passes(self):
+        text = """jobs:
+  build:
+    steps:
+      - shell: bash
+        run: echo test
+      - run: echo also-test
+        shell: bash
+"""
+        self.assertEqual(check_shell_lines(text), [])
 
     def test_defaults_fixture_passes(self):
         text = '''permissions: {}
@@ -95,7 +160,7 @@ jobs:
   build:
 '''
         self.assertTrue(check_defaults(text))
-        self.assertTrue(check_shell_lines(text))
+        self.assertEqual(check_shell_lines(text), [])
 
 
 if __name__ == "__main__":
