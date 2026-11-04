@@ -49,7 +49,13 @@ class WorkflowShellTests(unittest.TestCase):
     def test_repository_workflows(self):
         workflow_dir = Path(__file__).resolve().parent.parent / "workflows"
 
-        for workflow in sorted(workflow_dir.glob("*.yml")):
+        workflows = sorted(workflow_dir.glob("*.yml"))
+        # An empty list would pass every check: require the known workflows.
+        names = {workflow.name for workflow in workflows}
+        for required in ("brew-tarball.yml", "bump.yml", "publish.yml", "tests.yml"):
+            self.assertIn(required, names)
+
+        for workflow in workflows:
             text = workflow.read_text(encoding="utf-8")
             with self.subTest(workflow=workflow.name):
                 self.assertTrue(check_defaults(text), "missing top-level defaults.run.shell: bash")
