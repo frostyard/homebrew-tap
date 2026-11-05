@@ -23,7 +23,7 @@ cask "nsl" do
 
   binary "nsl"
 
-  # No zap stanza required
+  zap :not_required
 
   caveats <<~EOS
     nsl requires an x86-64 Linux host with KVM, systemd-vmspawn, QEMU,
