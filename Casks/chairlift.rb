@@ -2,9 +2,9 @@ cask "chairlift" do
   arch arm: "arm64", intel: "amd64"
   os linux: "linux"
 
-  version "0.13.0"
-  sha256 arm64_linux:  "d99cbd5082855d21017c23a37c22edf052b9f1c87e279fe812c19aed6f2b3768",
-         x86_64_linux: "b8fcd33ac61922d91cb523bdd490747816468a29d2fb75ad0e5209190b773f8d"
+  version "0.15.0"
+  sha256 arm64_linux:  "58ca59b408640ae63246154ee619eb64aaf0948d75485947b8d6ea32b6cecbf0",
+         x86_64_linux: "1a386f5c128e96227e41807cd53387bc2d75e1a15f5e9c8559dc861ce00481cb"
 
   url "https://github.com/frostyard/chairlift/releases/download/v#{version}/chairlift_#{version}_linux_#{arch}.tar.gz"
   name "ChairLift"
