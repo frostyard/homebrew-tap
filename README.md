@@ -36,7 +36,7 @@ installation guide.
 ## How it works
 
 An application's release is the source of a cask's version and its sha256.
-`nsl` writes its cask from GoReleaser; every other cask is updated by the
+`nsl`'s release opens 1 pull request with its cask from GoReleaser; every other cask is updated by the
 daily [bump workflow](.github/workflows/bump.yml), which downloads each new
 asset, verifies its sha256, its line in the release's `checksums.txt` (when
 the release has one) and its build attestation, and opens 1 pull request per cask. [brew test-bot](.github/workflows/tests.yml)
