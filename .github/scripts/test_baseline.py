@@ -130,11 +130,12 @@ def read(root, name):
 
 
 def workflows(root):
-    """The path and text of each workflow."""
+    """The path and text of each workflow: GitHub runs both `.yml` and `.yaml`."""
     folder = Path(root) / ".github" / "workflows"
     if not folder.is_dir():
         return []
-    return [(path, path.read_text(encoding="utf-8")) for path in sorted(folder.glob("*.yml"))]
+    paths = sorted(set(folder.glob("*.yml")) | set(folder.glob("*.yaml")))
+    return [(path, path.read_text(encoding="utf-8")) for path in paths]
 
 
 def indented_block(lines, start):
@@ -1005,6 +1006,29 @@ class NegativeTest(unittest.TestCase):
                         "jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2",
                         "jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550")
         self.assert_broken("B5")
+
+    def yaml_workflow(self, old, new):
+        """A copy of ci.yml as unpinned.yaml, with 1 change: B5 must read `.yaml` too."""
+        text = (self.root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn(old, text)
+        (self.root / ".github" / "workflows" / "unpinned.yaml").write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def test_b5_a_yaml_workflow_on_a_tag(self):
+        self.yaml_workflow("jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2",
+                           "jdx/mise-action@v5 # v5.2.2")
+        self.assert_broken("B5")
+
+    def test_b5_a_yaml_workflow_with_write_permission_at_the_top_level(self):
+        self.yaml_workflow("permissions: {}", "permissions:\n  contents: write")
+        self.assert_broken("B5")
+
+    def test_b5_a_yaml_workflow_that_keeps_credentials(self):
+        self.yaml_workflow("          persist-credentials: false\n", "")
+        self.assert_broken("B5")
+
+    def test_b5_the_unchanged_yaml_copy_passes(self):
+        self.yaml_workflow("make ci", "make ci")
+        CHECKS["B5"](self.root)
 
     def test_b6_a_glob_that_misses_the_bump_script(self):
         self.break_file(RISK_LIST, '"glob": ".github/scripts/**"', '"glob": ".github/scripts/*.mjs"')

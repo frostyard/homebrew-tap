@@ -68,7 +68,9 @@ use the Python standard library only. `mise.toml` and `mise.lock` pin Python
 ## Pull requests
 
 - `brew test-bot` in [`.github/workflows/tests.yml`](.github/workflows/tests.yml)
-  checks the tap syntax and builds the casks of a pull request.
+  runs `--only-tap-syntax` on the tap and `--only-formulae` on a pull
+  request. It does not install a cask: a cask installs an existing binary
+  release.
 - A pull request that is ready to merge gets the label `pr-pull`. That label
   starts [`.github/workflows/publish.yml`](.github/workflows/publish.yml),
   which runs `brew pr-pull` on the pull request, pushes the result to `main`

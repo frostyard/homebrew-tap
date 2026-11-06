@@ -22,12 +22,15 @@ If a credential may be exposed, say so in the first line.
 
 ## Supported versions
 
-The repository makes no releases of its own. `main` is what `brew tap
-frostyard/tap` reads, and fixes land on `main`; only the current `main` gets
-fixes. Each cask names a version of an application, and that application comes
-from its own repository's release and is supported by that repository. The
-Homebrew tarball of a release keeps its assets; a new tarball is built each
-week.
+The tap itself has no versions. `main` is what `brew tap frostyard/tap`
+reads, and fixes land on `main`; only the current `main` gets fixes. Each cask
+names a version of an application, and that application comes from its own
+repository's release and is supported by that repository.
+
+The only releases in this repository are the weekly Homebrew tarballs
+(`homebrew-<date>`) that `brew-tarball.yml` makes. Only the latest tarball gets
+fixes: a fix reaches it through `main` and the next tarball build. An older
+tarball release keeps its assets and gets no fix.
 
 ## Scope
 
