@@ -1,57 +1,63 @@
-# SNOW Linux Homebrew Tap
+<!-- readme-kind: packaging -->
+# homebrew-tap
 
-This is a _staging area_ to test Linux casks builds of things we want. It is intended to show that homebrew casks on linux work great. This repository's metric of success is when the applications in here are deleted. This also ships artwork and OEM tools that are better managed in userspace than on an image.
+The Frostyard Homebrew tap. It installs the binary releases of Frostyard's
+Linux applications with Homebrew, and it builds the Homebrew tarball that the
+Snow Linux images install. It is for people who run a Frostyard Linux image,
+or another Linux host, and want 1 command to install an application.
 
-## This is useful for
+**Status:** in production. It publishes from `main`.
 
-IDEs like Jetbrains and VSCode. They don't run well out of flatpaks so we put them on their own images. This lets the user also opt-into vscode instead of having it on the base image even if you don't use it.
+**Documentation:** [docs/README.md](docs/README.md)
 
-```shell
+## What it publishes
+
+| Item | What it is | Where it comes from |
+| --- | --- | --- |
+| `chairlift` cask | A system management tool for bootc-based installations | The release of [`frostyard/chairlift`](https://github.com/frostyard/chairlift). [`.github/workflows/bump.yml`](.github/workflows/bump.yml) updates the cask each day. |
+| `nsl` cask | Development machines on atomic hosts | GoReleaser in [`frostyard/nsl`](https://github.com/frostyard/nsl) writes `Casks/nsl.rb` on a release. |
+| Homebrew tarball | A Homebrew installation that a Snow Linux image unpacks | [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml) builds it each Tuesday and uploads it to a GitHub release. |
+
+## Install
+
+Tap the repository once, then install the casks you want:
+
+```sh
 brew tap frostyard/tap
-brew install --cask visual-studio-code-linux
-brew install --cask vscodium-linux
-brew install --cask jetbrains-toolbox-linux
-brew install --cask lm-studio-linux
-brew install --cask 1password-gui-linux
-brew install --cask framework-tool
-
-brew install --cask bluefin-wallpapers
-brew install --cask bluefin-wallpapers-extra
-brew install --cask aurora-wallpapers
-brew install --cask bazzite-wallpapers
-brew install --cask framework-wallpapers
+brew install --cask nsl
+brew install --cask chairlift
 ```
 
-## Includes
+Both casks install on Linux only. `nsl` needs an x86-64 host with KVM,
+`systemd-vmspawn`, QEMU, UEFI firmware and `virtiofsd`, and membership in the
+`kvm` group; `nsl doctor` checks the host and its caveats name the
+installation guide.
 
-- 1Password - Password manager
-- JetBrains Toolbox - JetBrains tools manager
-- LM Studio - Local LLM discovery, download, and runtime
-- Visual Studio Code - Microsoft's code editor
-- VSCodium - Open-source build of VS Code
-- Framework System Tool - Hardware management for Framework laptops
+## How it works
 
-### Wallpapers
+An application's release is the source of a cask's version and its sha256.
+`nsl` writes its cask from GoReleaser; every other cask is updated by the
+daily [bump workflow](.github/workflows/bump.yml), which downloads each new
+asset, verifies its sha256, its line in the release's `checksums.txt` (when
+the release has one) and its build attestation, and opens 1 pull request per cask. [brew test-bot](.github/workflows/tests.yml)
+checks every pull request, the label `pr-pull` merges it with `brew pr-pull`,
+and [docs/design/overview.md](docs/design/overview.md) has the flow.
 
-Metadata for GNOME is usually there.
+## Credits
 
-- Bluefin Wallpapers - Wallpapers for Bluefin
-- Bluefin Extra Wallpapers - Additional wallpapers for Bluefin
-- Aurora Wallpapers - Art made for Aurora
-- Bazzite Wallpapers - Wallpapers made for Bazzite
-- Framework Wallpapers
+The tap is forked from [ublue-os/homebrew-tap](https://github.com/ublue-os/homebrew-tap).
 
-## Scope
+## Develop
 
-- IDEs and other apps that aren't flatpak friendly
-- Command line tools for OEMs, framework, etc. so that we don't need to bake them into images
+```sh
+mise install   # the pinned tools: Python 3.12, from mise.toml and mise.lock
+make ci        # what CI runs: the gate, make verify
+```
 
-## Out of Scope
+## Where to go next
 
-- Browsers
-- GUI apps, every effort to use flatpak should be exhausted, or are out of our control (eg. vscode)
-- General requests for common apps. We don't expect users to use this repo directly, the packages are there for us to automate in the background, ideall they never know this tap exists.
-
-## Forked from UBlue
-
-[Original](https://github.com/ublue-os/homebrew-tap)
+- [AGENTS.md](AGENTS.md): the rules for agents and contributors.
+- [docs/README.md](docs/README.md): the documentation index and the design.
+- [SECURITY.md](SECURITY.md): report a vulnerability privately, and what gets
+  fixes.
+- [LICENSE](LICENSE): MIT.

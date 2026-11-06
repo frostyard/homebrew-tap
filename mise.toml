@@ -1,0 +1,8 @@
+# Tool pins for this repository (core ADR-0043). The gate is `make ci`, which
+# runs the unit tests with Python 3.12; mise.lock carries the checksum of the
+# interpreter that mise installs here and in CI.
+[settings]
+lockfile = true
+
+[tools]
+python = "3.12.16"
