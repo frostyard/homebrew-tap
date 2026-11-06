@@ -59,7 +59,14 @@ class WorkflowShellTests(unittest.TestCase):
         )
         # An empty list would pass every check: require the known workflows.
         names = {workflow.name for workflow in workflows}
-        for required in ("brew-tarball.yml", "bump.yml", "publish.yml", "tests.yml"):
+        for required in (
+            "brew-tarball.yml",
+            "bump.yml",
+            "ci.yml",
+            "publish.yml",
+            "risk-paths.yml",
+            "tests.yml",
+        ):
             self.assertIn(required, names)
 
         for workflow in workflows:

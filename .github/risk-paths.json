@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "paths": [
+    {
+      "glob": ".github/risk-paths.json",
+      "why": "governance: the high-risk path list itself"
+    },
+    {
+      "glob": ".github/workflows/**",
+      "why": "publication: the bump, pr-pull, test-bot, tarball release and risk-paths workflows, and their token permissions"
+    },
+    {
+      "glob": ".github/scripts/**",
+      "why": "publication: the bump script, which rewrites the sha256 of a cask and opens the pull requests, and its tests"
+    },
+    {
+      "glob": "Casks/**",
+      "why": "publication: the download URL and the sha256 that every user installs"
+    },
+    {
+      "glob": "Formula/**",
+      "why": "publication: a formula states the download URL and the sha256 that `brew` builds"
+    },
+    {
+      "glob": "Makefile",
+      "why": "governance: the verify gate"
+    },
+    {
+      "glob": "mise.toml",
+      "why": "governance: the tool pins that CI installs"
+    },
+    {
+      "glob": "mise.lock",
+      "why": "governance: the checksums of the tools that CI installs"
+    }
+  ]
+}
