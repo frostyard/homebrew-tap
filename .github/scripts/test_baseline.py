@@ -945,6 +945,17 @@ class NegativeTest(unittest.TestCase):
             CHECKS[row](self.root)
         self.assertTrue(str(caught.exception).startswith(f"{row}:"), str(caught.exception))
 
+    def mise_pin(self):
+        """The pinned `jdx/mise-action` line in ci.yml, as it is now.
+
+        Dependabot bumps the pin; a negative test that names a fixed SHA
+        breaks on each bump, so read the pin from the file.
+        """
+        text = (self.root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        found = re.search(r"jdx/mise-action@([0-9a-f]{40}) (# v\S+)", text)
+        self.assertIsNotNone(found, "ci.yml has no jdx/mise-action pin with a version comment")
+        return found.group(0), found.group(1), found.group(2)
+
     def break_file(self, name, old, new):
         path = self.root / name
         text = path.read_text(encoding="utf-8")
@@ -996,15 +1007,13 @@ class NegativeTest(unittest.TestCase):
         self.assert_broken("B5")
 
     def test_b5_an_action_on_a_tag(self):
-        self.break_file(".github/workflows/ci.yml",
-                        "jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2",
-                        "jdx/mise-action@v5 # v5.2.2")
+        pin, _, comment = self.mise_pin()
+        self.break_file(".github/workflows/ci.yml", pin, f"jdx/mise-action@v5 {comment}")
         self.assert_broken("B5")
 
     def test_b5_a_pin_without_a_version_comment(self):
-        self.break_file(".github/workflows/ci.yml",
-                        "jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2",
-                        "jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550")
+        pin, sha, _ = self.mise_pin()
+        self.break_file(".github/workflows/ci.yml", pin, f"jdx/mise-action@{sha}")
         self.assert_broken("B5")
 
     def yaml_workflow(self, old, new):
@@ -1014,8 +1023,8 @@ class NegativeTest(unittest.TestCase):
         (self.root / ".github" / "workflows" / "unpinned.yaml").write_text(text.replace(old, new, 1), encoding="utf-8")
 
     def test_b5_a_yaml_workflow_on_a_tag(self):
-        self.yaml_workflow("jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2",
-                           "jdx/mise-action@v5 # v5.2.2")
+        pin, _, comment = self.mise_pin()
+        self.yaml_workflow(pin, f"jdx/mise-action@v5 {comment}")
         self.assert_broken("B5")
 
     def test_b5_a_yaml_workflow_with_write_permission_at_the_top_level(self):
