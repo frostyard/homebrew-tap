@@ -197,7 +197,7 @@ def workflow_events(text):
     for index, line in enumerate(lines):
         if not re.match(r"^on:", line):
             continue
-        value = line.split(":", 1)[1].strip()
+        value = re.sub(r"(?:^|\s)#.*$", "", line.split(":", 1)[1]).strip()
         if value.startswith("["):
             return [name.strip().strip("'\"") for name in value.strip("[]").split(",") if name.strip()]
         if value:
@@ -228,7 +228,7 @@ def caller_types(text):
     trigger: a `types:` list of another trigger is not the caller's.
     """
     lines = text.split("\n")
-    on_at = next((index for index, line in enumerate(lines) if re.fullmatch(r"on:[ \t]*", line)), None)
+    on_at = next((index for index, line in enumerate(lines) if re.fullmatch(r"on:[ \t]*(?:#.*)?", line)), None)
     if on_at is None:
         return None
     trigger_at = None
@@ -239,7 +239,7 @@ def caller_types(text):
             continue
         if not line[:1].isspace():
             return None
-        if re.fullmatch(r" {2}pull_request_target:[ \t]*", line):
+        if re.fullmatch(r" {2}pull_request_target:[ \t]*(?:#.*)?", line):
             trigger_at = index
             break
     if trigger_at is None:
@@ -251,7 +251,7 @@ def caller_types(text):
             continue
         if len(line) - len(line.lstrip()) <= 2:
             return []
-        found = re.fullmatch(r" {4}types:[ \t]*\[(.*)\][ \t]*", line)
+        found = re.fullmatch(r" {4}types:[ \t]*\[([^\]]*)\][ \t]*(?:#.*)?", line)
         if found:
             return [name.strip() for name in found.group(1).split(",") if name.strip()]
     return []
@@ -1420,6 +1420,16 @@ class NegativeTest(unittest.TestCase):
     def test_b6_a_caller_with_comments_before_its_uses(self):
         (self.root / CALLER).write_text(COMMENTED_CALLER.replace("{pin}", self.core_pin()),
                                         encoding="utf-8")
+        check_b6(self.root)
+
+    def test_b6_a_caller_with_inline_comments_on_its_trigger(self):
+        path = self.root / CALLER
+        text = path.read_text(encoding="utf-8")
+        commented = (text.replace("\non:\n", "\non: # events\n", 1)
+                     .replace("\n  pull_request_target:\n", "\n  pull_request_target: # base branch\n", 1)
+                     .replace("edited, labeled]\n", "edited, labeled] # readiness [L1]\n", 1))
+        self.assertEqual(commented.count("#"), text.count("#") + 3)
+        path.write_text(commented, encoding="utf-8")
         check_b6(self.root)
 
     def add_risk_entry(self, entry):
