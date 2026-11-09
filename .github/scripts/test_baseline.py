@@ -191,13 +191,37 @@ def top_permissions(text):
     return None, []
 
 
+def without_comment(value):
+    """A YAML value without its trailing comment.
+
+    A `#` starts a comment only outside quotes and at the start or after a
+    space or tab; a `#` inside a quoted scalar is part of the value.
+    """
+    quote = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == '"' and char == "\\":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (index == 0 or value[index - 1] in " \t"):
+            return value[:index].strip()
+        index += 1
+    return value.strip()
+
+
 def workflow_events(text):
     """The event names of a workflow's `on:` key, in the yaml forms this file uses."""
     lines = text.split("\n")
     for index, line in enumerate(lines):
         if not re.match(r"^on:", line):
             continue
-        value = re.sub(r"(?:^|\s)#.*$", "", line.split(":", 1)[1]).strip()
+        value = without_comment(line.split(":", 1)[1])
         if value.startswith("["):
             return [name.strip().strip("'\"") for name in value.strip("[]").split(",") if name.strip()]
         if value:
@@ -228,7 +252,7 @@ def caller_types(text):
     trigger: a `types:` list of another trigger is not the caller's.
     """
     lines = text.split("\n")
-    on_at = next((index for index, line in enumerate(lines) if re.fullmatch(r"on:[ \t]*(?:#.*)?", line)), None)
+    on_at = next((index for index, line in enumerate(lines) if re.fullmatch(r"on:(?:[ \t]+#.*)?[ \t]*", line)), None)
     if on_at is None:
         return None
     trigger_at = None
@@ -239,7 +263,7 @@ def caller_types(text):
             continue
         if not line[:1].isspace():
             return None
-        if re.fullmatch(r" {2}pull_request_target:[ \t]*(?:#.*)?", line):
+        if re.fullmatch(r" {2}pull_request_target:(?:[ \t]+#.*)?[ \t]*", line):
             trigger_at = index
             break
     if trigger_at is None:
@@ -251,7 +275,7 @@ def caller_types(text):
             continue
         if len(line) - len(line.lstrip()) <= 2:
             return []
-        found = re.fullmatch(r" {4}types:[ \t]*\[([^\]]*)\][ \t]*(?:#.*)?", line)
+        found = re.fullmatch(r" {4}types:[ \t]*\[([^\]]*)\](?:[ \t]+#.*)?[ \t]*", line)
         if found:
             return [name.strip() for name in found.group(1).split(",") if name.strip()]
     return []
@@ -1478,6 +1502,11 @@ class NegativeTest(unittest.TestCase):
         self.break_file(".github/workflows/ci.yml", "  pull_request:", "  pull_request_target:")
         self.assert_broken("B12")
 
+    def test_b12_a_quoted_event_with_a_hash(self):
+        self.break_file(".github/workflows/ci.yml", "on:\n  pull_request:\n    branches: [main]\n",
+                        'on: "pull_request # not a comment"\n')
+        self.assert_broken("B12")
+
     def test_b12_an_event_key_that_only_contains_the_name(self):
         self.break_file(".github/workflows/ci.yml", "  pull_request:", "  push:")
         self.assert_broken("B12")
@@ -1629,6 +1658,17 @@ class EventTest(unittest.TestCase):
     def test_a_block_mapping(self):
         text = "on:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\n"
         self.assertEqual(workflow_events(text), ["pull_request", "push"])
+
+    def test_an_event_list_with_a_trailing_comment(self):
+        self.assertEqual(workflow_events("on: [push, pull_request] # CI\njobs:\n"), ["push", "pull_request"])
+
+    def test_a_hash_inside_double_quotes_is_part_of_the_event(self):
+        self.assertEqual(workflow_events('on: "pull_request # not a comment"\njobs:\n'),
+                         ["pull_request # not a comment"])
+
+    def test_a_hash_inside_single_quotes_is_part_of_the_event(self):
+        self.assertEqual(workflow_events("on: 'pull_request # not a comment'\njobs:\n"),
+                         ["pull_request # not a comment"])
 
     def test_pull_request_target_is_not_pull_request(self):
         text = "on:\n  pull_request_target:\n    types: [opened]\njobs:\n"
