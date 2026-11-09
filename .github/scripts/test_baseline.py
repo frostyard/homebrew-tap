@@ -19,12 +19,17 @@ substring:
   permissions. Every `uses:` is a 40-character commit SHA with a version
   comment after it. The top-level `defaults.run.shell: bash` block that the
   tap needs is checked by .github/scripts/test_workflows.py.
-- B6: the risk-paths spec's document rules, ported from core's
-  `scripts/lib/risk-paths.mjs` (`validateRiskPaths`, `validateGlob`): the exact
-  top-level keys, `schema_version: 1`, the glob syntax, no duplicate glob, and
-  a `why` that is at most 200 characters and names a category. The required
-  paths of this repository must match a glob: the list itself, the caller, the
-  bump, tarball and publish workflows, the bump script and the 2 casks.
+- B6: the risk-paths spec's document rules of schema version 2, ported from
+  core's `scripts/lib/risk-paths.mjs` (`validateRiskPaths`, `validateGlob`,
+  `checkRequiredPaths`): the exact top-level keys, `schema_version: 2`, a
+  `default_level` in L1 to L4, a `level` in L1 to L4 on every entry, the glob
+  syntax, no duplicate glob, and a `why` that is at most 200 characters and
+  names a category. Rule C with levels: every glob that matches the list or the
+  caller is L1 or L2. The required paths of this repository must match a glob:
+  the list itself, the caller, the bump, tarball and publish workflows, the
+  bump script and the 2 casks. The caller calls core's `pr-triage.yml` at a
+  40-character commit SHA, on `pull_request_target`, with the type `labeled`,
+  in a job named `pr-triage`, and with top-level `permissions: {}`.
 - B10: `LICENSE` is MIT or GPL-3.0. The repository's license metadata on
   GitHub (`gh api repos/<owner>/<repo> --jq .license.spdx_id`) is outside this
   check: the tree cannot show it.
@@ -56,12 +61,22 @@ CORRECTIONS_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FRAMEWORK_TREES = ("docs/superpowers", ".planning", ".cursor/rules", ".gaai", "yeti", "cairn")
 MAX_WHY_LENGTH = 200
 MAX_BRACE_EXPANSIONS = 256
+LEVELS = ("L1", "L2", "L3", "L4")
+STRICT_LEVELS = ("L1", "L2")
+SCHEMA_VERSION = 2
+LIST_KEYS = ("schema_version", "default_level", "paths")
+ENTRY_KEYS = ("glob", "level", "why")
 WHY_CATEGORY = re.compile(
     r"^(?:boot chain|signing and keys|update verification|auth|publication|"
     r"secrets and credentials|rulesets and settings|destructive operations|governance): \S")
 RISK_LIST = ".github/risk-paths.json"
-CORE_RISK_PATHS = re.compile(
-    r"uses:\s+frostyard/core/\.github/workflows/risk-paths\.yml@[0-9a-f]{40}(?:\s|$)")
+CORE_PR_TRIAGE = re.compile(
+    r"uses:\s+frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}(?:\s|$)")
+CALLER_TYPES = re.compile(r"^\s+types:\s*\[([^\]]*)\]", re.M)
+CALLER_JOB = "pr-triage"
+PINNED_USES = re.compile(r"frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}")
+JOB_USES = re.compile(r"^ {4}uses:[ \t]*(.*)$")
+BLOCK_SCALAR = re.compile(r"^(\s*)(?:-\s+)?[\w.-]+:[ \t]+[|>][-+0-9]*[ \t]*(?:#.*)?$")
 REQUIRED_RISK_PATHS = (
     RISK_LIST,
     ".github/workflows/bump.yml",
@@ -224,6 +239,34 @@ def job_blocks(text):
         if current is not None:
             blocks[current].append(line)
     return blocks
+
+
+def job_uses(block_lines):
+    """The value of a job's ``uses:`` key at indent 4, without its comment.
+
+    None when the job has no such key. A blank or comment-only line at any
+    indent is skipped, and a line under a ``run: |`` or ``run: >`` block scalar
+    is script text, not a workflow key, so it does not count.
+    """
+    block_indent = -1
+    for line in block_lines:
+        stripped = line.strip()
+        # A blank or comment-only line is not a key and not the end of the job:
+        # it neither counts as the job's uses: nor ends a block scalar early.
+        if stripped == "" or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if block_indent >= 0:
+            if indent > block_indent:
+                continue
+            block_indent = -1
+        found = JOB_USES.match(line)
+        if found:
+            return re.sub(r"[ \t]+#.*$", "", found.group(1)).strip()
+        started = BLOCK_SCALAR.match(line)
+        if started:
+            block_indent = len(started.group(1))
+    return None
 
 
 def check_b1(root):
@@ -451,7 +494,7 @@ def strict_object(pairs):
 
 
 def check_b6(root):
-    """.github/risk-paths.json by the risk-paths spec, and the caller workflow."""
+    """.github/risk-paths.json, schema version 2 by the risk-paths spec, and the caller workflow."""
     text = read(root, RISK_LIST)
     if text is None:
         fail("B6", f"{RISK_LIST} is missing")
@@ -461,14 +504,17 @@ def check_b6(root):
         fail("B6", f"{RISK_LIST} is not JSON: {error}")
     if not isinstance(document, dict):
         fail("B6", "$: the top level must be an object")
-    unknown = sorted(set(document) - {"schema_version", "paths"})
-    missing = sorted({"schema_version", "paths"} - set(document))
+    unknown = sorted(set(document) - set(LIST_KEYS))
+    missing = sorted(set(LIST_KEYS) - set(document))
     if unknown:
         fail("B6", f"$: unknown key(s): {', '.join(unknown)}")
     if missing:
         fail("B6", f"$: missing key(s): {', '.join(missing)}")
-    if type(document["schema_version"]) is not int or document["schema_version"] != 1:
-        fail("B6", "schema_version: must be the integer 1")
+    if type(document["schema_version"]) is not int or document["schema_version"] != SCHEMA_VERSION:
+        fail("B6", f"schema_version: must be the integer {SCHEMA_VERSION}")
+    default_level = document["default_level"]
+    if not isinstance(default_level, str) or default_level not in LEVELS:
+        fail("B6", f"default_level: must be 1 of {', '.join(LEVELS)}")
     entries = document["paths"]
     if not isinstance(entries, list):
         fail("B6", "paths: must be an array")
@@ -479,8 +525,8 @@ def check_b6(root):
         at = f"paths[{index}]"
         if not isinstance(entry, dict):
             fail("B6", f"{at}: must be an object")
-        unknown = sorted(set(entry) - {"glob", "why"})
-        missing = sorted({"glob", "why"} - set(entry))
+        unknown = sorted(set(entry) - set(ENTRY_KEYS))
+        missing = sorted(set(ENTRY_KEYS) - set(entry))
         if unknown:
             fail("B6", f"{at}: unknown key(s): {', '.join(unknown)}")
         if missing:
@@ -492,8 +538,11 @@ def check_b6(root):
         if problems:
             fail("B6", f"{at}.glob: {glob!r}: {problems[0]}")
         if glob in globs:
-            fail("B6", f"{at}.glob: duplicate glob {glob!r} (also paths[{globs[glob]}])")
-        globs[glob] = index
+            fail("B6", f"{at}.glob: duplicate glob {glob!r} (also paths[{globs[glob][0]}])")
+        level = entry["level"]
+        if not isinstance(level, str) or level not in LEVELS:
+            fail("B6", f"{at}.level: must be 1 of {', '.join(LEVELS)}")
+        globs[glob] = (index, level)
         why = entry["why"]
         if not isinstance(why, str):
             fail("B6", f"{at}.why: must be a string")
@@ -508,15 +557,35 @@ def check_b6(root):
             fail("B6", f"no glob matches {required}")
     if not any(match(glob, CALLER) for glob in globs):
         fail("B6", f"no glob matches the caller workflow {CALLER}")
-    caller = next(((path, text) for path, text in workflows(root) if CORE_RISK_PATHS.search(text)), None)
+    for required in (RISK_LIST, CALLER):
+        for glob, (_, level) in globs.items():
+            if match(glob, required) and level not in STRICT_LEVELS:
+                fail("B6", f"the glob {glob!r} matches {required} and must be L1 or L2, not {level}")
+    caller = next(((path, text) for path, text in workflows(root) if CORE_PR_TRIAGE.search(text)), None)
     if caller is None:
-        fail("B6", f"no workflow calls frostyard/core/.github/workflows/risk-paths.yml at a commit SHA")
+        fail("B6", "no workflow calls frostyard/core/.github/workflows/pr-triage.yml at a commit SHA")
     path, caller_text = caller
     if "pull_request_target" not in workflow_events(caller_text):
         fail("B6", f"{path.name} does not run on pull_request_target")
     value, _ = top_permissions(caller_text)
     if value != "{}":
         fail("B6", f"{path.name} does not set top-level permissions: {{}}")
+    types = CALLER_TYPES.search(caller_text)
+    names = [name.strip() for name in types.group(1).split(",")] if types else []
+    if "labeled" not in names:
+        fail("B6", f"{path.name} does not run on the labeled type")
+    blocks = job_blocks(caller_text)
+    if CALLER_JOB not in blocks:
+        fail("B6", f"{path.name} has no job named {CALLER_JOB}")
+    uses = job_uses(blocks[CALLER_JOB])
+    if uses is None:
+        fail("B6", f"{path.name}: the job {CALLER_JOB} must set uses: at indent 4 to "
+                   f"frostyard/core/.github/workflows/pr-triage.yml at a commit SHA; a uses: "
+                   f"line in another job or in a run: block does not count")
+    if not PINNED_USES.fullmatch(uses):
+        fail("B6", f"{path.name}: the uses: of the job {CALLER_JOB} must be "
+                   f"frostyard/core/.github/workflows/pr-triage.yml@<40-character commit SHA>, "
+                   f"not {uses!r}")
 
 
 def check_b7(root):
@@ -933,6 +1002,62 @@ class CorrectionsTest(unittest.TestCase):
         check_b2(self.corrections(""))
 
 
+ANOTHER_JOB_CALLER = (
+    'name: PR triage\n'
+    'on:\n'
+    '  pull_request_target:\n'
+    '    types: [opened, synchronize, reopened, edited, labeled]\n'
+    'permissions: {}\n'
+    'jobs:\n'
+    '  pr-triage:\n'
+    '    runs-on: ubuntu-latest\n'
+    '    permissions:\n'
+    '      contents: read\n'
+    '    steps:\n'
+    '      - run: echo triage\n'
+    '  triage:\n'
+    '    permissions:\n'
+    '      contents: read\n'
+    '      pull-requests: write\n'
+    '    uses: {pin}\n'
+)
+
+RUN_BLOCK_CALLER = (
+    'name: PR triage\n'
+    'on:\n'
+    '  pull_request_target:\n'
+    '    types: [opened, synchronize, reopened, edited, labeled]\n'
+    'permissions: {}\n'
+    'jobs:\n'
+    '  pr-triage:\n'
+    '    runs-on: ubuntu-latest\n'
+    '    permissions:\n'
+    '      contents: read\n'
+    '    steps:\n'
+    '      - run: |\n'
+    '          uses: {pin}\n'
+)
+
+
+COMMENTED_CALLER = (
+    '# A note before the workflow.\n'
+    'name: PR triage\n'
+    'on:\n'
+    '  pull_request_target:\n'
+    '    types: [opened, synchronize, reopened, edited, labeled]\n'
+    'permissions: {}\n'
+    'jobs:\n'
+    '# A note at indent 0, before the job pr-triage.\n'
+    '  pr-triage:\n'
+    '    permissions:\n'
+    '      contents: read\n'
+    '      pull-requests: write\n'
+    '# A note at indent 0, inside the job and before its uses.\n'
+    '  # A note at indent 2, inside the job and before its uses.\n'
+    '    # A note at indent 4, just before uses.\n'
+    '    uses: {pin}\n'
+)
+
 class NegativeTest(unittest.TestCase):
     """Break each row in a copy of the tree; the row's check must fail and name it."""
 
@@ -944,6 +1069,15 @@ class NegativeTest(unittest.TestCase):
         with self.assertRaises(BaselineError) as caught:
             CHECKS[row](self.root)
         self.assertTrue(str(caught.exception).startswith(f"{row}:"), str(caught.exception))
+
+    def assert_broken_because(self, row, fragment):
+        """The row fails and its message holds the fragment."""
+        with self.assertRaises(BaselineError) as caught:
+            CHECKS[row](self.root)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith(f"{row}:"), message)
+        self.assertIn(fragment, message)
+
 
     def mise_pin(self):
         """The pinned `jdx/mise-action` line in ci.yml, as it is now.
@@ -1058,12 +1192,48 @@ class NegativeTest(unittest.TestCase):
         (self.root / RISK_LIST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         self.assert_broken("B6")
 
+    def test_b6_a_version_1_list(self):
+        self.break_file(RISK_LIST, '"schema_version": 2,\n  "default_level": "L3",\n', '"schema_version": 1,\n')
+        self.assert_broken("B6")
+
+    def test_b6_a_schema_version_that_is_a_boolean(self):
+        self.break_file(RISK_LIST, '"schema_version": 2,', '"schema_version": true,')
+        self.assert_broken("B6")
+
+    def test_b6_a_bad_default_level(self):
+        self.break_file(RISK_LIST, '"default_level": "L3"', '"default_level": "L5"')
+        self.assert_broken("B6")
+
+    def test_b6_a_list_without_a_default_level(self):
+        self.break_file(RISK_LIST, '  "default_level": "L3",\n', '')
+        self.assert_broken("B6")
+
+    def test_b6_an_entry_without_a_level(self):
+        self.break_file(RISK_LIST, '      "glob": "Makefile",\n      "level": "L2",\n',
+                        '      "glob": "Makefile",\n')
+        self.assert_broken("B6")
+
+    def test_b6_a_level_outside_l1_to_l4(self):
+        self.break_file(RISK_LIST, '      "glob": "Makefile",\n      "level": "L2",\n',
+                        '      "glob": "Makefile",\n      "level": "L5",\n')
+        self.assert_broken("B6")
+
+    def test_b6_the_list_glob_at_l3(self):
+        self.break_file(RISK_LIST, '      "glob": ".github/risk-paths.json",\n      "level": "L2",\n',
+                        '      "glob": ".github/risk-paths.json",\n      "level": "L3",\n')
+        self.assert_broken("B6")
+
+    def test_b6_the_caller_glob_at_l3(self):
+        self.break_file(RISK_LIST, '      "glob": ".github/workflows/**",\n      "level": "L1",\n',
+                        '      "glob": ".github/workflows/**",\n      "level": "L3",\n')
+        self.assert_broken("B6")
+
     def test_b6_an_unknown_top_level_key(self):
-        self.break_file(RISK_LIST, '"schema_version": 1', '"schema_version": 1,\n  "owners": []')
+        self.break_file(RISK_LIST, '"schema_version": 2', '"schema_version": 2,\n  "owners": []')
         self.assert_broken("B6")
 
     def test_b6_a_duplicate_top_level_key(self):
-        self.break_file(".github/risk-paths.json", '"schema_version": 1,', '"schema_version": 1,\n  "schema_version": 1,')
+        self.break_file(".github/risk-paths.json", '"schema_version": 2,', '"schema_version": 2,\n  "schema_version": 2,')
         self.assert_broken("B6")
 
     def test_b6_a_duplicate_entry_key(self):
@@ -1087,6 +1257,49 @@ class NegativeTest(unittest.TestCase):
     def test_b6_a_caller_on_pull_request(self):
         self.break_file(CALLER, "pull_request_target:", "pull_request:")
         self.assert_broken("B6")
+
+    def test_b6_a_caller_that_still_pins_risk_paths_yml(self):
+        self.break_file(CALLER, "workflows/pr-triage.yml@", "workflows/risk-paths.yml@")
+        self.assert_broken("B6")
+
+    def core_pin(self):
+        """The pinned core reusable workflow of the caller, as it is now.
+
+        A core bump changes the SHA and its date comment; a negative test that
+        names a fixed SHA breaks on each bump, so read the pin from the file.
+        """
+        text = (self.root / CALLER).read_text(encoding="utf-8")
+        found = re.search(r"frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}", text)
+        self.assertIsNotNone(found, f"{CALLER} has no pinned pr-triage.yml caller")
+        return found.group(0)
+
+    def test_b6_a_caller_on_a_core_branch(self):
+        self.break_file(CALLER, self.core_pin(), "frostyard/core/.github/workflows/pr-triage.yml@main")
+        self.assert_broken("B6")
+
+    def test_b6_a_caller_without_the_labeled_type(self):
+        self.break_file(CALLER, "reopened, edited, labeled]", "reopened, edited]")
+        self.assert_broken("B6")
+
+    def test_b6_a_caller_with_another_job_id(self):
+        self.break_file(CALLER, "  pr-triage:\n", "  levels:\n")
+        self.assert_broken("B6")
+
+    def test_b6_a_caller_with_the_pinned_uses_in_another_job(self):
+        (self.root / CALLER).write_text(ANOTHER_JOB_CALLER.replace("{pin}", self.core_pin()),
+                                        encoding="utf-8")
+        self.assert_broken_because("B6", "must set uses: at indent 4")
+
+    def test_b6_a_caller_with_the_pinned_uses_in_a_run_block(self):
+        (self.root / CALLER).write_text(RUN_BLOCK_CALLER.replace("{pin}", self.core_pin()),
+                                        encoding="utf-8")
+        self.assert_broken_because("B6", "must set uses: at indent 4")
+
+    def test_b6_a_caller_with_comments_before_its_uses(self):
+        (self.root / CALLER).write_text(COMMENTED_CALLER.replace("{pin}", self.core_pin()),
+                                        encoding="utf-8")
+        check_b6(self.root)
+
 
     def test_b7_a_template_without_a_risk_tier(self):
         self.break_file(".github/pull_request_template.md", "## Risk tier", "## Risks")

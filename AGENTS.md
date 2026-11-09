@@ -21,7 +21,7 @@ file.
 | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | `brew test-bot` on a push to `main` and on every pull request. |
 | [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml) | Builds a Homebrew tarball for Linux and uploads it to a GitHub release, each Tuesday. |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs `make ci` on every pull request. |
-| [`.github/workflows/risk-paths.yml`](.github/workflows/risk-paths.yml) | The caller of core's risk-paths workflow. |
+| [`.github/workflows/risk-paths.yml`](.github/workflows/risk-paths.yml) | The caller of core's `pr-triage.yml` workflow: it adds the level label and `risk:high`. |
 | [`.github/scripts/bump_casks.py`](.github/scripts/bump_casks.py) | The bump script: version, sha256, verification, branch and pull request. |
 | [`.github/scripts/test_*.py`](.github/scripts/) | The unit tests of the bump script, the workflows and the baseline. |
 | [`docs/`](docs/README.md) | The documentation index: the design of the tap. |
@@ -84,9 +84,13 @@ use the Python standard library only. `mise.toml` and `mise.lock` pin Python
   and deletes the branch. A pull request with no `pr-pull` label is merged as
   it is.
 - A pull request that touches a path in
-  [`.github/risk-paths.json`](.github/risk-paths.json) gets the label
-  `risk:high` (core ADR-0068). Its body names each matched path and why the
-  change is safe.
+  [`.github/risk-paths.json`](.github/risk-paths.json) gets 1 level label,
+  `level:L1` to `level:L4`; L1 and L2 also get `risk:high` (core ADR-0068,
+  ADR-0078). The owner reads each level as the risk-paths spec says: L1 is
+  every line, L2 the whole diff, L3 a skim of the diff, L4 the title and CI.
+  The workflow removes `ready-for-human` when the head moves after the label,
+  or when CI at the head is not green (core ADR-0077). Its body names each
+  matched path and why the change is safe.
 - **A blocking review point adds a guard:** a test that fails without the fix,
   or a rule here when no test can catch it, plus 1 line in
   [`.memory/corrections.jsonl`](.memory/corrections.jsonl)
