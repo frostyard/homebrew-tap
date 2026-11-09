@@ -1,36 +1,45 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "default_level": "L3",
   "paths": [
     {
       "glob": ".github/risk-paths.json",
+      "level": "L2",
       "why": "governance: the high-risk path list itself"
     },
     {
       "glob": ".github/workflows/**",
+      "level": "L1",
       "why": "publication: the bump, pr-pull, test-bot, tarball release and risk-paths workflows, and their token permissions"
     },
     {
       "glob": ".github/scripts/**",
+      "level": "L1",
       "why": "publication: the bump script, which rewrites the sha256 of a cask and opens the pull requests, and its tests"
     },
     {
       "glob": "Casks/**",
+      "level": "L1",
       "why": "publication: the download URL and the sha256 that every user installs"
     },
     {
       "glob": "Formula/**",
+      "level": "L1",
       "why": "publication: a formula states the download URL and the sha256 that `brew` builds"
     },
     {
       "glob": "Makefile",
+      "level": "L2",
       "why": "governance: the verify gate"
     },
     {
       "glob": "mise.toml",
+      "level": "L2",
       "why": "governance: the tool pins that CI installs"
     },
     {
       "glob": "mise.lock",
+      "level": "L2",
       "why": "governance: the checksums of the tools that CI installs"
     }
   ]
