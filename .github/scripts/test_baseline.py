@@ -72,7 +72,6 @@ WHY_CATEGORY = re.compile(
 RISK_LIST = ".github/risk-paths.json"
 CORE_PR_TRIAGE = re.compile(
     r"uses:\s+frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}(?:\s|$)")
-CALLER_TYPES = re.compile(r"^\s+types:\s*\[([^\]]*)\]", re.M)
 CALLER_JOB = "pr-triage"
 PINNED_USES = re.compile(r"frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}")
 JOB_USES = re.compile(r"^ {4}uses:[ \t]*(.*)$")
@@ -222,20 +221,75 @@ def workflow_events(text):
     return []
 
 
+def caller_types(text):
+    """The `types:` names of the `on: pull_request_target:` trigger.
+
+    [] when the trigger lists no types, and None when the workflow has no such
+    trigger: a `types:` list of another trigger is not the caller's.
+    """
+    lines = text.split("\n")
+    on_at = next((index for index, line in enumerate(lines) if re.fullmatch(r"on:[ \t]*", line)), None)
+    if on_at is None:
+        return None
+    trigger_at = None
+    for index in range(on_at + 1, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            continue
+        if not line[:1].isspace():
+            return None
+        if re.fullmatch(r" {2}pull_request_target:[ \t]*", line):
+            trigger_at = index
+            break
+    if trigger_at is None:
+        return None
+    for index in range(trigger_at + 1, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= 2:
+            return []
+        found = re.fullmatch(r" {4}types:[ \t]*\[(.*)\][ \t]*", line)
+        if found:
+            return [name.strip() for name in found.group(1).split(",") if name.strip()]
+    return []
+
+
 def job_blocks(text):
-    """The lines of each job under `jobs:`, by job name."""
+    """The lines of each job of the top-level `jobs:` mapping, by job name.
+
+    The mapping ends at the next top-level key, and a line of a block scalar is
+    script text, not a job header: a `run-name: |` block that holds a job-like
+    line creates no job.
+    """
     lines = text.split("\n")
     start = next((index for index, line in enumerate(lines) if line == "jobs:"), None)
     if start is None:
         return {}
     blocks = {}
     current = None
+    block_indent = -1
     for line in lines[start + 1:]:
-        match = JOB.match(line)
-        if match:
-            current = match.group(1)
+        stripped = line.strip()
+        if stripped == "" or stripped.startswith("#"):
+            continue
+        if not line[0].isspace():
+            break
+        indent = len(line) - len(line.lstrip())
+        if block_indent >= 0:
+            if indent > block_indent:
+                continue
+            block_indent = -1
+        header = JOB.match(line)
+        if header:
+            current = header.group(1)
             blocks[current] = []
             continue
+        started = BLOCK_SCALAR.match(line)
+        if started:
+            block_indent = len(started.group(1))
         if current is not None:
             blocks[current].append(line)
     return blocks
@@ -469,18 +523,47 @@ def validate_glob(glob):
     return sorted(set(errors))
 
 
+def segment_pattern(segment):
+    """1 glob segment as a pattern: `*` any run in the segment, `?` 1 character."""
+    source = ""
+    for char in segment:
+        if char == "*":
+            source += "[^/]*"
+        elif char == "?":
+            source += "[^/]"
+        else:
+            source += re.escape(char)
+    return re.compile(source)
+
+
+def match_segments(glob_segments, path_segments):
+    """Whole-segment match: `**` matches 0 or more whole segments."""
+    if not glob_segments:
+        return not path_segments
+    if glob_segments[0] == "**":
+        return match_segments(glob_segments[1:], path_segments) or (
+            bool(path_segments) and match_segments(glob_segments, path_segments[1:])
+        )
+    if not path_segments:
+        return False
+    return (segment_pattern(glob_segments[0]).fullmatch(path_segments[0]) is not None
+            and match_segments(glob_segments[1:], path_segments[1:]))
+
+
 def match(glob, path):
-    """Match a path against a risk-path glob: *, ** and {a,b}, as the spec says."""
-    if "{" in glob and "}" in glob:
-        head, rest = glob.split("{", 1)
-        middle, tail = rest.split("}", 1)
-        return any(match(head + alternative + tail, path) for alternative in middle.split(","))
-    pattern = ""
-    for index, part in enumerate(glob.split("/")):
-        if index:
-            pattern += "/"
-        pattern += ".*" if part == "**" else re.escape(part).replace(r"\*", "[^/]*")
-    return re.fullmatch(pattern, path) is not None
+    """Match a path against a risk-path glob, as core's matchGlob does.
+
+    `*` matches any run of characters in 1 segment, `?` matches 1 character in
+    1 segment, `**` as a whole segment matches 0 or more segments, and a brace
+    group matches 1 of its alternatives. The whole path must match.
+    """
+    if not isinstance(glob, str) or not isinstance(path, str) or glob == "" or path == "":
+        return False
+    expansions, errors = expand_braces(glob)
+    if errors:
+        return False
+    path_segments = path.split("/")
+    return any(match_segments(expansion.split("/"), path_segments) for expansion in expansions)
 
 
 def strict_object(pairs):
@@ -570,10 +653,11 @@ def check_b6(root):
     value, _ = top_permissions(caller_text)
     if value != "{}":
         fail("B6", f"{path.name} does not set top-level permissions: {{}}")
-    types = CALLER_TYPES.search(caller_text)
-    names = [name.strip() for name in types.group(1).split(",")] if types else []
+    names = caller_types(caller_text)
+    if names is None:
+        fail("B6", f"{path.name} has no on: pull_request_target: trigger")
     if "labeled" not in names:
-        fail("B6", f"{path.name} does not run on the labeled type")
+        fail("B6", f"{path.name} does not list the type labeled under on: pull_request_target")
     blocks = job_blocks(caller_text)
     if CALLER_JOB not in blocks:
         fail("B6", f"{path.name} has no job named {CALLER_JOB}")
@@ -1002,6 +1086,28 @@ class CorrectionsTest(unittest.TestCase):
         check_b2(self.corrections(""))
 
 
+class RiskPathGlobTest(unittest.TestCase):
+    """match(), by core's matchGlob: whole segments, `?` 1 character, `**` 0 or more."""
+
+    def test_a_question_mark_matches_1_character_in_its_segment(self):
+        self.assertTrue(match(".github/workflows/risk-paths.ym?", ".github/workflows/risk-paths.yml"))
+        self.assertFalse(match(".github/workflows/risk-paths.ym?", ".github/workflows/risk-paths.yaml"))
+        self.assertFalse(match("risk-paths.ym?", "a/risk-paths.yml"))
+
+    def test_a_leading_double_star_matches_0_directories(self):
+        self.assertTrue(match("**/.github/risk-paths.json", ".github/risk-paths.json"))
+        self.assertTrue(match("**/.github/risk-paths.json", "a/b/.github/risk-paths.json"))
+        self.assertFalse(match("**/.github/risk-paths.json", "a/.github/other.json"))
+
+    def test_a_double_star_matches_0_or_more_whole_segments(self):
+        self.assertTrue(match("a/**", "a"))
+        self.assertTrue(match("a/**", "a/b/c"))
+        self.assertTrue(match("a/**/b", "a/b"))
+        self.assertTrue(match("a/**/b", "a/x/y/b"))
+        self.assertFalse(match("a/**/b", "a/b/c"))
+        self.assertFalse(match("**", ""))
+
+
 ANOTHER_JOB_CALLER = (
     'name: PR triage\n'
     'on:\n'
@@ -1038,6 +1144,22 @@ RUN_BLOCK_CALLER = (
     '          uses: {pin}\n'
 )
 
+
+OTHER_TRIGGER_CALLER = (
+    'name: PR triage\n'
+    'on:\n'
+    '  pull_request:\n'
+    '    types: [labeled]\n'
+    '  pull_request_target:\n'
+    '    types: [opened, synchronize, reopened, edited]\n'
+    'permissions: {}\n'
+    'jobs:\n'
+    '  pr-triage:\n'
+    '    permissions:\n'
+    '      contents: read\n'
+    '      pull-requests: write\n'
+    '    uses: {pin}\n'
+)
 
 COMMENTED_CALLER = (
     '# A note before the workflow.\n'
@@ -1299,6 +1421,39 @@ class NegativeTest(unittest.TestCase):
         (self.root / CALLER).write_text(COMMENTED_CALLER.replace("{pin}", self.core_pin()),
                                         encoding="utf-8")
         check_b6(self.root)
+
+    def add_risk_entry(self, entry):
+        """Add 1 entry to a copy of the risk-path list."""
+        path = self.root / RISK_LIST
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["paths"].append(entry)
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    def test_b6_an_l3_glob_with_a_question_mark_that_matches_the_caller(self):
+        self.add_risk_entry({"glob": ".github/workflows/risk-paths.ym?", "level": "L3",
+                             "why": "governance: the caller"})
+        self.assert_broken_because("B6", "must be L1 or L2")
+
+    def test_b6_an_l3_glob_with_a_leading_double_star_that_matches_the_list(self):
+        self.add_risk_entry({"glob": "**/.github/risk-paths.json", "level": "L3",
+                             "why": "governance: the list"})
+        self.assert_broken_because("B6", "must be L1 or L2")
+
+    def test_b6_a_job_header_inside_a_run_name_block(self):
+        self.break_file(CALLER, "  pr-triage:\n", "  other:\n")
+        caller = self.root / CALLER
+        caller.write_text(
+            caller.read_text(encoding="utf-8")
+            + "run-name: |\n"
+            + "  pr-triage:\n"
+            + f"    uses: {self.core_pin()}\n",
+            encoding="utf-8")
+        self.assert_broken_because("B6", "has no job named pr-triage")
+
+    def test_b6_a_types_list_of_another_trigger(self):
+        (self.root / CALLER).write_text(OTHER_TRIGGER_CALLER.replace("{pin}", self.core_pin()),
+                                        encoding="utf-8")
+        self.assert_broken_because("B6", "does not list the type labeled under on: pull_request_target")
 
 
     def test_b7_a_template_without_a_risk_tier(self):
