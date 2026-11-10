@@ -22,8 +22,6 @@ cask "chairlift" do
            target: "#{Dir.home}/.local/share/applications/org.frostyard.ChairLift.desktop"
   artifact "data/icons/hicolor/scalable/apps/org.frostyard.ChairLift.svg",
            target: "#{Dir.home}/.local/share/icons/hicolor/scalable/apps/org.frostyard.ChairLift.svg"
-  artifact "data/icons/hicolor/scalable/apps/org.frostyard.ChairLift-flower.svg",
-           target: "#{Dir.home}/.local/share/icons/hicolor/scalable/apps/org.frostyard.ChairLift-flower.svg"
   artifact "data/icons/hicolor/symbolic/apps/org.frostyard.ChairLift-symbolic.svg",
            target: "#{Dir.home}/.local/share/icons/hicolor/symbolic/apps/org.frostyard.ChairLift-symbolic.svg"
 
