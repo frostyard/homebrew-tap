@@ -11,10 +11,15 @@ casks and formulae only (core's repository-baseline spec, Exemptions).
 The checks port the canonical rules where they exist, rather than matching a
 substring:
 
-- B2: core's `.memory` gate, `scripts/check-corrections.mjs`: the 5 fields, a
-  calendar-valid date, a non-blank scope, correction and evidence, an empty
-  `promoted_to` allowed, and no blank line, no duplicate key and no BOM.
-  The append-only rule against a base ref is not ported here: it needs git.
+- B2: core's `.memory` gate, `scripts/check-corrections.mjs` (ADR-0081): the
+  retired `.memory/corrections.jsonl` fails; `.memory/corrections/` is a real
+  folder of `<date>-<slug>.json` record files (a slug of at most 60
+  characters) and an optional empty `.gitkeep`, with no subfolder and no
+  symbolic link. Each record is UTF-8 with the 5 string fields, no duplicate
+  key and no BOM, a calendar-valid date that equals the name date, a
+  non-blank scope, correction and evidence, an empty `promoted_to` allowed,
+  and the canonical bytes of `JSON.stringify(record, null, 2)` and a newline.
+  The comparison against a base ref is not ported here: it needs git.
 - B5: `persist-credentials: false` on every checkout and top-level read-only
   permissions. Every `uses:` is a 40-character commit SHA with a version
   comment after it. The top-level `defaults.run.shell: bash` block that the
@@ -57,7 +62,12 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 ALIASES = ("CLAUDE.md", "GEMINI.md", ".cursorrules", ".github/copilot-instructions.md")
 CORRECTION_KEYS = ("date", "scope", "correction", "evidence", "promoted_to")
-CORRECTIONS_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+CORRECTIONS_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+CORRECTIONS_OLD = ".memory/corrections.jsonl"
+CORRECTIONS_DIR = ".memory/corrections"
+CORRECTION_NAME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.json")
+CORRECTION_SLUG_MAX = 60
+LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 FRAMEWORK_TREES = ("docs/superpowers", ".planning", ".cursor/rules", ".gaai", "yeti", "cairn")
 MAX_WHY_LENGTH = 200
 MAX_BRACE_EXPANSIONS = 256
@@ -364,54 +374,94 @@ def check_b1(root):
 
 
 def check_b2(root):
-    """.memory/corrections.jsonl, by core's scripts/check-corrections.mjs rules."""
-    text = read(root, ".memory/corrections.jsonl")
-    if text is None:
-        fail("B2", ".memory/corrections.jsonl is missing")
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    for number, line in enumerate(lines, start=1):
-        if line.strip() == "":
-            fail("B2", f"line {number}: blank line")
-        duplicates = []
+    """.memory/corrections/, 1 file for each record, by core's scripts/check-corrections.mjs rules."""
+    root = Path(root)
+    if os.path.lexists(root / CORRECTIONS_OLD):
+        fail("B2", f"{CORRECTIONS_OLD} is retired; add a file under {CORRECTIONS_DIR}/")
+    folder = root / CORRECTIONS_DIR
+    if folder.is_symlink():
+        fail("B2", f"{CORRECTIONS_DIR}: symbolic link, not followed")
+    if not folder.exists():
+        fail("B2", f"{CORRECTIONS_DIR}: folder is missing")
+    if not folder.is_dir():
+        fail("B2", f"{CORRECTIONS_DIR}: not a folder")
+    for path in sorted(folder.iterdir(), key=lambda entry: entry.name):
+        check_correction(path)
 
-        def collect(pairs):
-            names = [name for name, _ in pairs]
-            duplicates.extend(sorted({name for name in names if names.count(name) > 1}))
-            return dict(pairs)
 
-        try:
-            entry = json.loads(line, object_pairs_hook=collect)
-        except ValueError as error:
-            fail("B2", f"line {number}: invalid JSON: {error}")
-        if not isinstance(entry, dict):
-            fail("B2", f"line {number}: not a plain object")
-        if duplicates:
-            fail("B2", f"line {number}: duplicate key(s): {', '.join(duplicates)}")
-        missing = [key for key in CORRECTION_KEYS if key not in entry]
-        unknown = [key for key in entry if key not in CORRECTION_KEYS]
-        if missing or unknown:
-            parts = []
-            if missing:
-                parts.append(f"missing key(s): {', '.join(missing)}")
-            if unknown:
-                parts.append(f"unknown key(s): {', '.join(unknown)}")
-            fail("B2", f"line {number}: {'; '.join(parts)}")
-        for key in CORRECTION_KEYS:
-            if not isinstance(entry[key], str):
-                fail("B2", f"line {number}: value for {key} is not a string")
-        date = entry["date"]
-        if CORRECTIONS_DATE.match(date) is None:
-            fail("B2", f"line {number}: invalid date: {date}")
-        year, month, day = (int(part) for part in date.split("-"))
-        try:
-            datetime.date(year, month, day)
-        except ValueError:
-            fail("B2", f"line {number}: invalid date: {date}")
-        for key in ("scope", "correction", "evidence"):
-            if entry[key].strip() == "":
-                fail("B2", f"line {number}: {key} is empty")
+def canonical_correction(entry):
+    """The canonical bytes of a record: JSON.stringify(record, null, 2) and a newline."""
+    ordered = {key: entry[key] for key in CORRECTION_KEYS}
+    text = json.dumps(ordered, indent=2, ensure_ascii=False)
+    # JSON.stringify writes a lone surrogate as a lowercase \u escape.
+    text = LONE_SURROGATE.sub(lambda found: f"\\u{ord(found.group()):04x}", text)
+    return (text + "\n").encode("utf-8")
+
+
+def check_correction(path):
+    """1 entry of .memory/corrections/: an empty .gitkeep or 1 record file."""
+    name = path.name
+    where = f"{CORRECTIONS_DIR}/{name}"
+    if path.is_symlink():
+        fail("B2", f"{where}: symbolic link, not followed")
+    if not path.is_file():
+        fail("B2", f"{where}: not a regular file")
+    if name == ".gitkeep":
+        if path.stat().st_size != 0:
+            fail("B2", f"{where}: .gitkeep is not empty")
+        return
+    named = CORRECTION_NAME.fullmatch(name)
+    if named is None:
+        fail("B2", f"{where}: bad file name (want <date>-<slug>.json)")
+    if len(named.group(2)) > CORRECTION_SLUG_MAX:
+        fail("B2", f"{where}: slug longer than {CORRECTION_SLUG_MAX} characters")
+    data = path.read_bytes()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("B2", f"{where}: invalid UTF-8")
+    duplicates = []
+
+    def collect(pairs):
+        names = [key for key, _ in pairs]
+        duplicates.extend(sorted({key for key in names if names.count(key) > 1}))
+        return dict(pairs)
+
+    try:
+        entry = json.loads(text, object_pairs_hook=collect)
+    except ValueError as error:
+        fail("B2", f"{where}: invalid JSON: {error}")
+    if not isinstance(entry, dict):
+        fail("B2", f"{where}: not a plain object")
+    if duplicates:
+        fail("B2", f"{where}: duplicate key(s): {', '.join(duplicates)}")
+    missing = [key for key in CORRECTION_KEYS if key not in entry]
+    unknown = [key for key in entry if key not in CORRECTION_KEYS]
+    if missing or unknown:
+        parts = []
+        if missing:
+            parts.append(f"missing key(s): {', '.join(missing)}")
+        if unknown:
+            parts.append(f"unknown key(s): {', '.join(unknown)}")
+        fail("B2", f"{where}: {'; '.join(parts)}")
+    for key in CORRECTION_KEYS:
+        if not isinstance(entry[key], str):
+            fail("B2", f"{where}: value for {key} is not a string")
+    date = entry["date"]
+    if CORRECTIONS_DATE.fullmatch(date) is None:
+        fail("B2", f"{where}: invalid date: {date}")
+    year, month, day = (int(part) for part in date.split("-"))
+    try:
+        datetime.date(year, month, day)
+    except ValueError:
+        fail("B2", f"{where}: invalid date: {date}")
+    for key in ("scope", "correction", "evidence"):
+        if entry[key].strip() == "":
+            fail("B2", f"{where}: {key} is empty")
+    if named.group(1) != date:
+        fail("B2", f"{where}: name date {named.group(1)} does not equal date {date}")
+    if data != canonical_correction(entry):
+        fail("B2", f"{where}: not in canonical form")
 
 
 def check_b4(root):
@@ -1063,51 +1113,124 @@ class BaselineTest(unittest.TestCase):
 class CorrectionsTest(unittest.TestCase):
     """B2 on a tree of its own: the rules of core's check-corrections.mjs."""
 
-    def corrections(self, body):
+    NAME = "2026-11-06-a-record.json"
+    GOOD = ('{\n  "date": "2026-11-06",\n  "scope": "s",\n  "correction": "c",\n'
+            '  "evidence": "e",\n  "promoted_to": ""\n}\n')
+
+    def tree(self):
         folder = Path(tempfile.mkdtemp(prefix="homebrew-tap-baseline-gate-"))
         self.addCleanup(shutil.rmtree, folder, True)
-        (folder / ".memory").mkdir()
-        (folder / ".memory" / "corrections.jsonl").write_text(body, encoding="utf-8")
+        (folder / ".memory" / "corrections").mkdir(parents=True)
         return folder
 
-    GOOD = ('{"date": "2026-11-06", "scope": "s", "correction": "c", "evidence": "e", "promoted_to": ""}\n')
+    def corrections(self, body, name=NAME):
+        folder = self.tree()
+        data = body if isinstance(body, bytes) else body.encode("utf-8")
+        (folder / ".memory" / "corrections" / name).write_bytes(data)
+        return folder
 
-    def test_an_empty_promoted_to_passes(self):
+    def assert_fails(self, folder, *fragments):
+        with self.assertRaises(BaselineError) as caught:
+            check_b2(folder)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("B2:"), message)
+        for fragment in fragments:
+            self.assertIn(fragment, message)
+
+    def test_a_canonical_record_passes(self):
         check_b2(self.corrections(self.GOOD))
 
-    def test_a_blank_line_fails(self):
-        with self.assertRaises(BaselineError) as caught:
-            check_b2(self.corrections(self.GOOD + "\n"))
-        self.assertIn("B2", str(caught.exception))
-        self.assertIn("blank line", str(caught.exception))
+    def test_control_characters_and_non_ascii_in_the_javascript_form_pass(self):
+        # The bytes that JSON.stringify(record, null, 2) writes: short escapes,
+        # lowercase \u escapes for other control characters, raw non-ASCII
+        # text, and a raw U+2028.
+        evidence = 'tab\\t nl\\n ctl\\u0001 del\x7f quote\\" e\u0301 \u2028 \U0001f600'
+        check_b2(self.corrections(self.GOOD.replace('"e"', f'"{evidence}"')))
 
-    def test_a_short_line_that_looks_blank_fails(self):
-        with self.assertRaises(BaselineError) as caught:
-            check_b2(self.corrections(self.GOOD + "\r\n"))
-        self.assertIn("blank line", str(caught.exception))
+    def test_a_folder_with_only_gitkeep_passes(self):
+        folder = self.tree()
+        (folder / ".memory" / "corrections" / ".gitkeep").write_bytes(b"")
+        check_b2(folder)
+
+    def test_the_retired_file_fails(self):
+        folder = self.corrections(self.GOOD)
+        (folder / ".memory" / "corrections.jsonl").write_text(
+            '{"date": "2026-11-06", "scope": "s", "correction": "c", "evidence": "e", "promoted_to": ""}\n',
+            encoding="utf-8")
+        self.assert_fails(folder, ".memory/corrections.jsonl is retired")
+
+    def test_a_missing_folder_fails(self):
+        folder = self.tree()
+        (folder / ".memory" / "corrections").rmdir()
+        self.assert_fails(folder, ".memory/corrections: folder is missing")
+
+    def test_a_folder_symlink_fails(self):
+        folder = self.tree()
+        memory = folder / ".memory"
+        (memory / "corrections").rename(memory / "elsewhere")
+        os.symlink("elsewhere", memory / "corrections")
+        self.assert_fails(folder, ".memory/corrections: symbolic link")
+
+    def test_a_bad_file_name_fails(self):
+        self.assert_fails(self.corrections(self.GOOD, "2026-11-06-Bad_Name.json"),
+                          "2026-11-06-Bad_Name.json: bad file name")
+
+    def test_a_long_slug_fails(self):
+        name = "2026-11-06-" + "a" * 61 + ".json"
+        self.assert_fails(self.corrections(self.GOOD, name), f"{name}: slug longer than 60")
+
+    def test_a_name_date_that_differs_fails(self):
+        self.assert_fails(self.corrections(self.GOOD, "2026-11-07-a-record.json"),
+                          "2026-11-07-a-record.json: name date 2026-11-07 does not equal date 2026-11-06")
+
+    def test_a_compact_record_fails(self):
+        compact = '{"date":"2026-11-06","scope":"s","correction":"c","evidence":"e","promoted_to":""}\n'
+        self.assert_fails(self.corrections(compact), f"{self.NAME}: not in canonical form")
+
+    def test_a_blank_line_after_the_record_fails(self):
+        self.assert_fails(self.corrections(self.GOOD + "\n"), f"{self.NAME}: not in canonical form")
+
+    def test_invalid_utf8_fails(self):
+        body = self.GOOD.encode("utf-8").replace(b'"e"', b'"\xff"')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid UTF-8")
 
     def test_an_invalid_date_fails(self):
-        with self.assertRaises(BaselineError) as caught:
-            check_b2(self.corrections(self.GOOD.replace("2026-11-06", "2026-13-45")))
-        self.assertIn("invalid date", str(caught.exception))
+        body = self.GOOD.replace("2026-11-06", "2026-02-30")
+        self.assert_fails(self.corrections(body, "2026-02-30-a-record.json"), "invalid date: 2026-02-30")
 
     def test_a_duplicate_key_fails(self):
-        duplicated = ('{"date": "2026-11-06", "date": "2026-11-06", "scope": "s", "correction": "c", '
-                      '"evidence": "e", "promoted_to": ""}\n')
-        with self.assertRaises(BaselineError) as caught:
-            check_b2(self.corrections(duplicated))
-        self.assertIn("duplicate key", str(caught.exception))
+        duplicated = self.GOOD.replace('  "scope": "s",\n', '  "scope": "s",\n  "scope": "s",\n')
+        self.assert_fails(self.corrections(duplicated), f"{self.NAME}: duplicate key(s): scope")
+
+    def test_a_missing_key_fails(self):
+        body = self.GOOD.replace(',\n  "promoted_to": ""', "")
+        self.assert_fails(self.corrections(body), f"{self.NAME}: missing key(s): promoted_to")
+
+    def test_a_non_string_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": 1')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: value for promoted_to is not a string")
+
+    def test_an_evidence_of_spaces_fails(self):
+        body = self.GOOD.replace('"evidence": "e"', '"evidence": "  "')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: evidence is empty")
 
     def test_a_bom_fails(self):
-        with self.assertRaises(BaselineError) as caught:
-            check_b2(self.corrections("\ufeff" + self.GOOD))
-        self.assertIn("invalid JSON", str(caught.exception))
+        self.assert_fails(self.corrections("\ufeff" + self.GOOD), f"{self.NAME}: invalid JSON")
 
-    def test_a_file_without_a_trailing_newline_passes(self):
-        check_b2(self.corrections(self.GOOD.rstrip("\n")))
+    def test_a_subfolder_fails(self):
+        folder = self.corrections(self.GOOD)
+        (folder / ".memory" / "corrections" / "2026-11-06-a-folder.json").mkdir()
+        self.assert_fails(folder, "2026-11-06-a-folder.json: not a regular file")
 
-    def test_an_empty_file_passes(self):
-        check_b2(self.corrections(""))
+    def test_a_record_symlink_fails(self):
+        folder = self.corrections(self.GOOD)
+        os.symlink(self.NAME, folder / ".memory" / "corrections" / "2026-11-06-a-link.json")
+        self.assert_fails(folder, "2026-11-06-a-link.json: symbolic link")
+
+    def test_a_non_empty_gitkeep_fails(self):
+        folder = self.corrections(self.GOOD)
+        (folder / ".memory" / "corrections" / ".gitkeep").write_text("x\n", encoding="utf-8")
+        self.assert_fails(folder, ".memory/corrections/.gitkeep: .gitkeep is not empty")
 
 
 class RiskPathGlobTest(unittest.TestCase):
@@ -1254,18 +1377,24 @@ class NegativeTest(unittest.TestCase):
         os.symlink("README.md", path)
         self.assert_broken("B1")
 
-    def test_b2_a_line_with_a_missing_field(self):
-        path = self.root / ".memory" / "corrections.jsonl"
-        path.write_text(path.read_text(encoding="utf-8")
-                        + '{"date": "2026-11-06", "scope": "x", "correction": "y"}\n', encoding="utf-8")
-        self.assert_broken("B2")
+    def test_b2_the_retired_file_back(self):
+        (self.root / ".memory" / "corrections.jsonl").write_text(
+            '{"date": "2026-11-06", "scope": "x", "correction": "y", "evidence": "e", "promoted_to": ""}\n',
+            encoding="utf-8")
+        self.assert_broken_because("B2", ".memory/corrections.jsonl is retired")
+
+    def test_b2_a_record_with_a_missing_field(self):
+        path = self.root / ".memory" / "corrections" / "2026-11-06-test-missing-field.json"
+        path.write_text('{\n  "date": "2026-11-06",\n  "scope": "x",\n  "correction": "y"\n}\n',
+                        encoding="utf-8")
+        self.assert_broken_because("B2", "2026-11-06-test-missing-field.json: missing key(s)")
 
     def test_b2_a_duplicate_key(self):
-        path = self.root / ".memory" / "corrections.jsonl"
-        path.write_text(path.read_text(encoding="utf-8")
-                        + '{"date": "2026-11-06", "date": "2026-11-06", "scope": "x", "correction": "y", '
-                          '"evidence": "e", "promoted_to": ""}\n', encoding="utf-8")
-        self.assert_broken("B2")
+        path = self.root / ".memory" / "corrections" / "2026-11-06-test-duplicate-key.json"
+        path.write_text('{\n  "date": "2026-11-06",\n  "date": "2026-11-06",\n  "scope": "x",\n'
+                        '  "correction": "y",\n  "evidence": "e",\n  "promoted_to": ""\n}\n',
+                        encoding="utf-8")
+        self.assert_broken_because("B2", "2026-11-06-test-duplicate-key.json: duplicate key(s): date")
 
     def test_b3_is_exempt_here(self):
         self.assertNotIn("B3", CHECKS)

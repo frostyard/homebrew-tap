@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-09",
+  "scope": "baseline guard",
+  "correction": "A scan of a job's lines must skip a blank or comment-only line before it tests the indent boundary: a comment at indent 0 or 2 inside the job is not a key and must not end the job before its uses:",
+  "evidence": "bketelsen/agentic-template#9, review note on the caller check of the 2 Python ports, the same point",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}
