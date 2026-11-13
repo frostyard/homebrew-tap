@@ -30,6 +30,6 @@ jobs:
 
       # The tools come from mise.toml and mise.lock (core ADR-0043), the same
       # set a developer gets from `mise install`.
-      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       - run: make ci
