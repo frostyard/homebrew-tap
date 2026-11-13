@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "baseline guard",
+  "correction": "A workflow guard must read every file that GitHub runs as a workflow, both .github/workflows/*.yml and *.yaml; a guard that globs only *.yml passes an unpinned or write-scoped .yaml workflow",
+  "evidence": "frostyard/homebrew-tap#28, cross-review (openai/gpt-6.1-sol) of head 8dce6e7, finding 1",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

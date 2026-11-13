@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-13",
+  "scope": "baseline",
+  "correction": "A port of core's check-corrections.mjs must refuse a date with a year below 100: core's Date.UTC maps years 0-99 to 1900-1999 and rejects them, while Go time.Parse and Python datetime accept them",
+  "evidence": "frostyard/homebrew-tap#45, cross-review of head 5617d81 (openai/gpt-6.1-sol)",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

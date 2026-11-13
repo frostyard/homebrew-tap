@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-09",
+  "scope": "baseline guard",
+  "correction": "A caller check must bind the job to its uses: key: the job pr-triage must hold a uses: at indent 4 with the pinned pr-triage workflow, and a line inside a run: block scalar must not count; a scan for the uses: text in the whole file passes another job or a run: block",
+  "evidence": "bketelsen/agentic-template#9, cross-review (openai/gpt-6.1-sol) of head 712c29a, finding 1; the same defect in this port",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

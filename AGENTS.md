@@ -97,9 +97,8 @@ use the Python standard library only. `mise.toml` and `mise.lock` pin Python
   the head moves after the label, or when CI at the head is not green (core
   ADR-0077). Its body names each matched path and why the change is safe.
 - **A blocking review point adds a guard:** a test that fails without the fix,
-  or a rule here when no test can catch it, plus 1 line in
-  [`.memory/corrections.jsonl`](.memory/corrections.jsonl)
-  ([`.memory/README.md`](.memory/README.md)).
+  or a rule here when no test can catch it, plus 1 record file in
+  `.memory/corrections/` ([`.memory/README.md`](.memory/README.md)).
 - **A change to a cask comes from its source repository.** A release in the
   application's repository is the source of the version and the sha256; this
   repository gets them from `bump_casks.py` or from GoReleaser, not from a

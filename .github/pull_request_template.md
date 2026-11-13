@@ -31,4 +31,4 @@ Risk tier: 1 — <!-- justification -->
 - [ ] Revert test for a fix: the new test fails with the fix reverted; command: <!-- name it -->
 - [ ] Workflows changed: every action is SHA-pinned with `# vX.Y.Z`, `permissions: {}`, and `persist-credentials: false`
 - [ ] Cask changed: the version and the sha256 come from the application's own release, not from a hand edit
-- [ ] Blocking review point fixed: guard added and 1 `.memory/corrections.jsonl` line added
+- [ ] Blocking review point fixed: guard added and 1 file added under `.memory/corrections/`

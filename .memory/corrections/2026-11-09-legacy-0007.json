@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-09",
+  "scope": "baseline guard",
+  "correction": "A comment strip in a YAML line parser must skip a # inside a quoted scalar; a regex that cuts at any space-# turns the invalid event \"pull_request # x\" into pull_request",
+  "evidence": "frostyard/homebrew-tap#37 cross-review (openai/gpt-6.1-sol) re-review 2 of head dfbc980",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

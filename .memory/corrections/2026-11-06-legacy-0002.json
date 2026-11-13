@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-06",
+  "scope": "baseline tests",
+  "correction": "A negative test that breaks a real workflow must read the pin it changes from the file, not name a fixed SHA: Dependabot bumps the pin, and a fixed SHA fails make ci on every bump PR",
+  "evidence": "frostyard/homebrew-tap#33, Test run 42285766139: 3 B5 negative tests failed on the bump of jdx/mise-action from 5.2.2 to 5.2.6",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

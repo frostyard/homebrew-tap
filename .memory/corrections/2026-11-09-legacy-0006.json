@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-09",
+  "scope": "baseline guard",
+  "correction": "A line parser of workflow keys must accept a trailing comment on each key it reads (on:, pull_request_target:, types:); a full match without an optional comment rejects a valid caller",
+  "evidence": "frostyard/homebrew-tap#37 cross-review (openai/gpt-6.1-sol) re-review 1 of head b3cff9e, finding C5",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}
