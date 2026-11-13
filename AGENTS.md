@@ -18,9 +18,9 @@ file.
 | [`Casks/`](Casks/) | The casks users install: `chairlift.rb` and `nsl.rb`. |
 | [`.github/workflows/bump.yml`](.github/workflows/bump.yml) | Daily run of `bump_casks.py`; it opens 1 pull request per stale cask or formula and never pushes to the base branch. |
 | [`.github/workflows/publish.yml`](.github/workflows/publish.yml) | `brew pr-pull` for a pull request that carries the label `pr-pull`. |
-| [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | `brew test-bot` on a push to `main` and on every pull request. |
+| [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | `brew test-bot` on a push to `main`, on every pull request, and on a `workflow_dispatch` that `bump_casks.py` starts on a bump branch. |
 | [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml) | Builds a Homebrew tarball for Linux and uploads it to a GitHub release, each Tuesday. |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs `make ci` on every pull request. |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs `make ci` on every pull request, and on a `workflow_dispatch` that `bump_casks.py` starts on a bump branch. |
 | [`.github/workflows/risk-paths.yml`](.github/workflows/risk-paths.yml) | The caller of core's `pr-triage.yml` workflow: it adds the level label and `risk:high`. |
 | [`.github/scripts/bump_casks.py`](.github/scripts/bump_casks.py) | The bump script: version, sha256, verification, branch and pull request. |
 | [`.github/scripts/test_*.py`](.github/scripts/) | The unit tests of the bump script, the workflows and the baseline. |
@@ -45,7 +45,10 @@ file.
   scheduled run of `.github/scripts/bump_casks.py` pushes a
   `bump/<item>-<version>` branch and opens 1 pull request into `main`; it
   skips a file that carries the GoReleaser marker, and it never commits to
-  `main` itself. A person reviews and merges that pull request.
+  `main` itself. A pull request that the workflow `GITHUB_TOKEN` opens
+  starts no `pull_request` run, so the script then starts `ci.yml` and
+  `tests.yml` on the branch with `gh workflow run` (#42). A person reviews
+  and merges that pull request.
 - **`bump_casks.py` must stay able to bump both kinds.** It reads
   `Casks/*.rb` and `Formula/*.rb`, so keep that layout and keep the file name
   the branch token comes from.

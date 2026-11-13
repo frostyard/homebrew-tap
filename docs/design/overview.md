@@ -52,7 +52,8 @@ python3 .github/scripts/bump_casks.py --tap-dir tap --base-ref "$BASE_REF"
 ```
 
 with `GH_TOKEN` in the environment, plus `--dry-run` when the input asks for
-it. The job grants `contents: write` and `pull-requests: write`, and the 2
+it. The job grants `contents: write`, `pull-requests: write` and
+`actions: write` (to start the check workflows, see below), and the 2
 checkouts keep no credentials, so the push and the API call use `GH_TOKEN`.
 
 ## 2. The bump script verifies before it writes
@@ -86,6 +87,15 @@ row with status `error` and the run exits 1:
    pull request into the base ref. A dry run prints the diff and restores the
    tap.
 
+After it opens the pull request, the script starts `ci.yml` and `tests.yml`
+on the bump branch with `gh workflow run`, which is a `workflow_dispatch`
+event. It must do this: a pull request that `GITHUB_TOKEN` opens starts no
+`pull_request` run ([issue #42](https://github.com/frostyard/homebrew-tap/issues/42)).
+The checks of a dispatched run attach to the head commit, so the pull request
+shows them. A dispatch that fails is the status `dispatch-failed`: the run
+exits 1, and the row names the manual step `gh workflow run <workflow> --repo
+frostyard/homebrew-tap --ref <branch>`.
+
 A bump branch always starts at the tap's ref at the start of the run, never at
 another item's branch, and the tap is restored to that ref after each item. An
 existing remote branch or an open pull request with the same head is
@@ -97,14 +107,24 @@ above.
 ## 3. A pull request is tested, then published
 
 [`tests.yml`](../../.github/workflows/tests.yml) runs `brew test-bot` on a push
-to `main` and on every pull request, on `ubuntu-24.04`: `--only-cleanup-before`,
-`--only-setup`, `--only-tap-syntax`, and `--only-formulae` on a pull request.
-It uploads the bottles of a pull request as a job artifact. The job reads with
-`actions: read`, `checks: read`, `contents: read` and `pull-requests: read`.
+to `main`, on every pull request and on a `workflow_dispatch` of a bump
+branch, on `ubuntu-24.04`: `--only-cleanup-before`, `--only-setup`,
+`--only-tap-syntax`, and `--only-formulae` on a pull request. A dispatch runs
+`--only-tap-syntax` but not `--only-formulae`: that step and the bottle upload
+run only on a `pull_request` event. The tap has no formula today, so a bump
+pull request loses no test. It uploads the bottles of a pull request as a job artifact. The job
+reads with `actions: read`, `checks: read`, `contents: read` and
+`pull-requests: read`.
 
-[`ci.yml`](../../.github/workflows/ci.yml) runs `make ci` on a pull request:
-`mise` installs Python 3.12.16 from `mise.toml` and `mise.lock`, then the
-gate runs the unit tests in [`.github/scripts/`](../../.github/scripts/).
+[`ci.yml`](../../.github/workflows/ci.yml) runs `make ci` on a pull request and
+on a `workflow_dispatch` of a bump branch: `mise` installs Python 3.12.16 from
+`mise.toml` and `mise.lock`, then the gate runs the unit tests in
+[`.github/scripts/`](../../.github/scripts/).
+
+The dispatch is how a bump pull request gets its `Test` and `test-bot` checks.
+`PR triage` ([`risk-paths.yml`](../../.github/workflows/risk-paths.yml)) is not
+started by a dispatch: it runs at the first label, edit or reopen from a person
+or the machine account.
 
 [`publish.yml`](../../.github/workflows/publish.yml) runs on
 `pull_request_target` with the type `labeled`, and its job runs only when the

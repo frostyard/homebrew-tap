@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
+      actions: write # gh workflow run: start the checks on a bump branch (#42)
       contents: write
       pull-requests: write
     steps:

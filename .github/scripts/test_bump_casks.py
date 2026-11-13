@@ -42,14 +42,22 @@ def asset(name: str, payload: bytes) -> dict:
 class FakeGh:
     """A stand-in for GhClient that serves fixture releases and blobs."""
 
-    def __init__(self, releases: dict, blobs: dict[str, bytes], fail_attestation: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        releases: dict,
+        blobs: dict[str, bytes],
+        fail_attestation: set[str] | None = None,
+        fail_dispatch: set[str] | None = None,
+    ) -> None:
         self.releases = releases
         self.blobs = blobs
         self.fail_attestation = fail_attestation or set()
+        self.fail_dispatch = fail_dispatch or set()
         self.calls: list[tuple[str, ...]] = []
         self.created_prs: list[dict] = []
         self.open_prs: dict[str, str] = {}
         self.attested: list[tuple[str, str]] = []
+        self.dispatched: list[tuple[str, str, str]] = []
 
     def release(self, slug: str, tag: str | None = None) -> dict | None:
         """Return the fixture payload for a slug and tag."""
@@ -79,6 +87,13 @@ class FakeGh:
     def open_pr(self, slug: str, head: str) -> str | None:
         """Return the fixture open PR number for a head branch, if any."""
         return self.open_prs.get(head)
+
+    def dispatch_workflow(self, slug: str, workflow: str, ref: str) -> None:
+        """Record a dispatched check workflow; fail the names in the fixture."""
+        self.calls.append(("dispatch", slug, workflow, ref))
+        self.dispatched.append((slug, workflow, ref))
+        if workflow in self.fail_dispatch:
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
 
 
 class FakeGit:
@@ -552,6 +567,71 @@ class PullRequestTests(BumpTestCase):
         self.assertIn("allow GitHub Actions to create pull requests", result.detail)
         self.assertTrue(result.failed)
 
+    def test_bumped_item_dispatches_both_check_workflows(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        path = self.write("chairlift", text)
+        gh = FakeGh(releases, blobs)
+        result = self.run_item(self.bumper(gh, dry_run=False, git=FakeGit()), path, "cask")
+        self.assertEqual(result.status, "bumped")
+        self.assertEqual([call[0] for call in gh.calls if call[0] == "dispatch"], ["dispatch", "dispatch"])
+        self.assertEqual(
+            gh.dispatched,
+            [
+                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2"),
+                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2"),
+            ],
+        )
+        # The checks start on the pushed branch only after the PR exists.
+        names = [call[0] for call in gh.calls]
+        self.assertLess(names.index("create_pr"), names.index("dispatch"))
+
+    def test_pr_exists_and_pr_failed_dispatch_nothing(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        path = self.write("chairlift", text)
+
+        exists = FakeGh(releases, blobs)
+        git = FakeGit(branches={"bump/chairlift-0.11.2"})
+        result = self.run_item(self.bumper(exists, dry_run=False, git=git), path, "cask")
+        self.assertEqual(result.status, "pr-exists")
+        self.assertEqual(exists.dispatched, [])
+
+        failed = FakeGh(releases, blobs)
+
+        def failing_create(*_args, **_kwargs) -> str:
+            raise RuntimeError("pull request create failed")
+
+        failed.create_pr = failing_create  # type: ignore[method-assign]
+        # The fake git does not restore the file, so start the second run clean.
+        path.write_text(text, encoding="utf-8")
+        result = self.run_item(self.bumper(failed, dry_run=False, git=FakeGit()), path, "cask")
+        self.assertEqual(result.status, "pr-failed")
+        self.assertEqual(failed.dispatched, [])
+
+    def test_dispatch_failure_reports_dispatch_failed_and_restores_the_tap(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        path = self.write("chairlift", text)
+        gh = FakeGh(releases, blobs, fail_dispatch={"ci.yml"})
+        git = FakeGit()
+        result = self.run_item(self.bumper(gh, dry_run=False, git=git), path, "cask")
+        self.assertEqual(result.status, "dispatch-failed")
+        self.assertTrue(result.failed)
+        self.assertEqual((result.current, result.latest), ("0.10.1", "0.11.2"))
+        self.assertIn("https://github.com/frostyard/homebrew-tap/pull/1", result.detail)
+        self.assertIn("ci.yml", result.detail)
+        self.assertIn("HTTP 403: Resource not accessible by integration", result.detail)
+        self.assertIn("gh workflow run ci.yml --repo frostyard/homebrew-tap --ref bump/chairlift-0.11.2", result.detail)
+        # A failure of the first workflow does not stop the second one.
+        self.assertEqual(
+            gh.dispatched,
+            [
+                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2"),
+                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2"),
+            ],
+        )
+        self.assertIn(("checkout", "--force", "main"), git.calls)
+        self.assertIn(("reset", "--hard", "main"), git.calls)
+        self.assertEqual(git.calls.count(("checkout", "--force", "main")), 1)
+
     def test_summary_table_lists_every_item(self) -> None:
         table = bc.summary_table(
             [
@@ -599,6 +679,23 @@ class GhClientTests(BumpTestCase):
         with self.assertRaises(bc.BumpError) as raised:
             bc.GhClient(runner=runner).verify_attestation(path, "frostyard/chairlift", "v0.11.2")
         self.assertIn("attestation", str(raised.exception))
+
+    def test_dispatch_workflow_builds_the_exact_command(self) -> None:
+        calls: list[list[str]] = []
+        gh = bc.GhClient(runner=lambda argv: calls.append(argv) or "")
+        gh.dispatch_workflow("frostyard/homebrew-tap", "ci.yml", "bump/x-1.0.0")
+        self.assertEqual(
+            calls,
+            [["gh", "workflow", "run", "ci.yml", "--repo", "frostyard/homebrew-tap", "--ref", "bump/x-1.0.0"]],
+        )
+
+    def test_dispatch_workflow_lets_runtime_error_through(self) -> None:
+        def runner(_argv: list[str]) -> str:
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
+
+        with self.assertRaises(RuntimeError) as raised:
+            bc.GhClient(runner=runner).dispatch_workflow("frostyard/homebrew-tap", "ci.yml", "bump/x-1.0.0")
+        self.assertIn("403", str(raised.exception))
 
 
 if __name__ == "__main__":

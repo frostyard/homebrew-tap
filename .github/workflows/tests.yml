@@ -1,10 +1,14 @@
 name: brew test-bot
 
+# bump.yml starts this workflow on a bump branch with workflow_dispatch: a
+# pull request that GITHUB_TOKEN opens starts no pull_request run, so the bump
+# PR would get no `test-bot` check (issue #42).
 on:
   push:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 permissions: {}
 
