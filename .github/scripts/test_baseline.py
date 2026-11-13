@@ -451,6 +451,9 @@ def check_correction(path):
     if CORRECTIONS_DATE.fullmatch(date) is None:
         fail("B2", f"{where}: invalid date: {date}")
     year, month, day = (int(part) for part in date.split("-"))
+    # Core's Date.UTC maps years 0-99 to 1900-1999, so it rejects them.
+    if year < 100:
+        fail("B2", f"{where}: invalid date: {date}")
     try:
         datetime.date(year, month, day)
     except ValueError:
@@ -1197,6 +1200,21 @@ class CorrectionsTest(unittest.TestCase):
     def test_an_invalid_date_fails(self):
         body = self.GOOD.replace("2026-11-06", "2026-02-30")
         self.assert_fails(self.corrections(body, "2026-02-30-a-record.json"), "invalid date: 2026-02-30")
+
+    # Core's Date.UTC maps years 0-99 to 1900-1999, so a year below 100 fails.
+    def test_the_year_0000_fails(self):
+        body = self.GOOD.replace("2026-11-06", "0000-01-01")
+        self.assert_fails(self.corrections(body, "0000-01-01-a-record.json"),
+                          "0000-01-01-a-record.json: invalid date: 0000-01-01")
+
+    def test_the_year_0099_fails(self):
+        body = self.GOOD.replace("2026-11-06", "0099-12-31")
+        self.assert_fails(self.corrections(body, "0099-12-31-a-record.json"),
+                          "0099-12-31-a-record.json: invalid date: 0099-12-31")
+
+    def test_the_year_0100_passes(self):
+        body = self.GOOD.replace("2026-11-06", "0100-01-01")
+        check_b2(self.corrections(body, "0100-01-01-a-record.json"))
 
     def test_a_duplicate_key_fails(self):
         duplicated = self.GOOD.replace('  "scope": "s",\n', '  "scope": "s",\n  "scope": "s",\n')
