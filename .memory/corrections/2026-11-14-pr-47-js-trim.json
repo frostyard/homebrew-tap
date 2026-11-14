@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-14",
+  "scope": "baseline",
+  "correction": "A port of core's check-corrections.mjs must use the white-space set of JavaScript trim for the empty check: Python str.strip() also removes U+0085 and U+001C-U+001F and keeps U+FEFF",
+  "evidence": "frostyard/homebrew-tap#47, a check of the ports against core's validator at 3d3d5c7",
+  "promoted_to": ".github/scripts/test_baseline.py"
+}

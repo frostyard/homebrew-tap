@@ -16,9 +16,11 @@ substring:
   folder of `<date>-<slug>.json` record files (a slug of at most 60
   characters) and an optional empty `.gitkeep`, with no subfolder and no
   symbolic link. Each record is UTF-8 with the 5 string fields, no duplicate
-  key and no BOM, a calendar-valid date that equals the name date, a
-  non-blank scope, correction and evidence, an empty `promoted_to` allowed,
-  and the canonical bytes of `JSON.stringify(record, null, 2)` and a newline.
+  key and no BOM (and no NaN or Infinity, which JSON.parse refuses), a
+  calendar-valid date that equals the name date, a scope, correction and
+  evidence that are not blank by JavaScript's `trim` (not Python's `strip`),
+  an empty `promoted_to` allowed, and the canonical bytes of
+  `JSON.stringify(record, null, 2)` and a newline.
   The comparison against a base ref is not ported here: it needs git.
 - B5: `persist-credentials: false` on every checkout and top-level read-only
   permissions. Every `uses:` is a 40-character commit SHA with a version
@@ -68,6 +70,12 @@ CORRECTIONS_DIR = ".memory/corrections"
 CORRECTION_NAME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.json")
 CORRECTION_SLUG_MAX = 60
 LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+# The characters that JavaScript's String.prototype.trim removes (ECMA-262
+# WhiteSpace and LineTerminator), which core's check-corrections.mjs uses for
+# its empty check. Python's str.strip() differs: it also removes U+0085 and
+# U+001C to U+001F, and it keeps U+FEFF.
+JS_WHITESPACE = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+                 "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
 FRAMEWORK_TREES = ("docs/superpowers", ".planning", ".cursor/rules", ".gaai", "yeti", "cairn")
 MAX_WHY_LENGTH = 200
 MAX_BRACE_EXPANSIONS = 256
@@ -376,6 +384,10 @@ def check_b1(root):
 def check_b2(root):
     """.memory/corrections/, 1 file for each record, by core's scripts/check-corrections.mjs rules."""
     root = Path(root)
+    # Core's linkedMemory(): a symbolic link at .memory moves the records out of
+    # the path the gate reads, so it fails before either form is read.
+    if (root / ".memory").is_symlink():
+        fail("B2", ".memory: symbolic link, not followed")
     if os.path.lexists(root / CORRECTIONS_OLD):
         fail("B2", f"{CORRECTIONS_OLD} is retired; add a file under {CORRECTIONS_DIR}/")
     folder = root / CORRECTIONS_DIR
@@ -427,8 +439,12 @@ def check_correction(path):
         duplicates.extend(sorted({key for key in names if names.count(key) > 1}))
         return dict(pairs)
 
+    def refuse_constant(name):
+        # JSON.parse refuses NaN, Infinity and -Infinity; Python accepts them.
+        raise ValueError(f"{name} is not JSON")
+
     try:
-        entry = json.loads(text, object_pairs_hook=collect)
+        entry = json.loads(text, object_pairs_hook=collect, parse_constant=refuse_constant)
     except ValueError as error:
         fail("B2", f"{where}: invalid JSON: {error}")
     if not isinstance(entry, dict):
@@ -459,7 +475,7 @@ def check_correction(path):
     except ValueError:
         fail("B2", f"{where}: invalid date: {date}")
     for key in ("scope", "correction", "evidence"):
-        if entry[key].strip() == "":
+        if entry[key].strip(JS_WHITESPACE) == "":
             fail("B2", f"{where}: {key} is empty")
     if named.group(1) != date:
         fail("B2", f"{where}: name date {named.group(1)} does not equal date {date}")
@@ -1249,6 +1265,78 @@ class CorrectionsTest(unittest.TestCase):
         folder = self.corrections(self.GOOD)
         (folder / ".memory" / "corrections" / ".gitkeep").write_text("x\n", encoding="utf-8")
         self.assert_fails(folder, ".memory/corrections/.gitkeep: .gitkeep is not empty")
+
+    # The empty check uses the white space of JavaScript's String.prototype.trim.
+    def evidence(self, value):
+        return self.corrections(self.GOOD.replace('"evidence": "e"', f'"evidence": "{value}"'))
+
+    def test_an_evidence_of_only_u_feff_fails(self):
+        self.assert_fails(self.evidence("\ufeff"), f"{self.NAME}: evidence is empty")
+
+    def test_an_evidence_of_only_u_2028_fails(self):
+        self.assert_fails(self.evidence("\u2028"), f"{self.NAME}: evidence is empty")
+
+    def test_an_evidence_of_only_u_0085_passes(self):
+        check_b2(self.evidence("\u0085"))
+
+    def test_an_evidence_of_only_u_001f_passes(self):
+        check_b2(self.evidence("\\u001f"))
+
+    def test_an_evidence_of_only_u_180e_passes(self):
+        check_b2(self.evidence("\u180e"))
+
+    def test_a_nan_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": NaN')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid JSON")
+
+    # The canonical bytes of core ADR-0081: only '"', '\' and characters below
+    # U+0020 are escaped, a lone surrogate as a lowercase \u escape.
+    def test_raw_u_2028_and_u_2029_pass(self):
+        check_b2(self.evidence("a\u2028b\u2029c"))
+
+    def test_an_escaped_u_2028_fails(self):
+        self.assert_fails(self.evidence("a\\u2028b"), f"{self.NAME}: not in canonical form")
+
+    def test_a_lowercase_lone_surrogate_escape_passes(self):
+        check_b2(self.evidence("a\\ud800b"))
+
+    def test_an_uppercase_lone_surrogate_escape_fails(self):
+        self.assert_fails(self.evidence("a\\uD800b"), f"{self.NAME}: not in canonical form")
+
+    def test_an_escaped_surrogate_pair_fails(self):
+        self.assert_fails(self.evidence("a\\ud83d\\ude00b"), f"{self.NAME}: not in canonical form")
+
+    def test_a_raw_emoji_passes(self):
+        check_b2(self.evidence("a\U0001f600b"))
+
+    def test_an_escaped_less_than_fails(self):
+        self.assert_fails(self.evidence("a\\u003cb"), f"{self.NAME}: not in canonical form")
+
+    def test_an_uppercase_control_escape_fails(self):
+        self.assert_fails(self.evidence("a\\u001Fb"), f"{self.NAME}: not in canonical form")
+
+    def test_a_memory_symlink_fails(self):
+        folder = self.corrections(self.GOOD)
+        (folder / ".memory").rename(folder / "inbox")
+        os.symlink("inbox", folder / ".memory")
+        self.assert_fails(folder, ".memory: symbolic link, not followed")
+
+    def test_an_escaped_u_2029_fails(self):
+        self.assert_fails(self.evidence("a\\u2029b"), f"{self.NAME}: not in canonical form")
+
+    def test_a_lowercase_lone_trail_surrogate_escape_passes(self):
+        check_b2(self.evidence("a\\udc00b"))
+
+    def test_an_infinity_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": Infinity')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid JSON")
+
+    def test_a_negative_infinity_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": -Infinity')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid JSON")
+
+    def test_an_escaped_delete_fails(self):
+        self.assert_fails(self.evidence("a\\u007fb"), f"{self.NAME}: not in canonical form")
 
 
 class RiskPathGlobTest(unittest.TestCase):
