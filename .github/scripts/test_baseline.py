@@ -384,6 +384,10 @@ def check_b1(root):
 def check_b2(root):
     """.memory/corrections/, 1 file for each record, by core's scripts/check-corrections.mjs rules."""
     root = Path(root)
+    # Core's linkedMemory(): a symbolic link at .memory moves the records out of
+    # the path the gate reads, so it fails before either form is read.
+    if (root / ".memory").is_symlink():
+        fail("B2", ".memory: symbolic link, not followed")
     if os.path.lexists(root / CORRECTIONS_OLD):
         fail("B2", f"{CORRECTIONS_OLD} is retired; add a file under {CORRECTIONS_DIR}/")
     folder = root / CORRECTIONS_DIR
@@ -1310,6 +1314,29 @@ class CorrectionsTest(unittest.TestCase):
 
     def test_an_uppercase_control_escape_fails(self):
         self.assert_fails(self.evidence("a\\u001Fb"), f"{self.NAME}: not in canonical form")
+
+    def test_a_memory_symlink_fails(self):
+        folder = self.corrections(self.GOOD)
+        (folder / ".memory").rename(folder / "inbox")
+        os.symlink("inbox", folder / ".memory")
+        self.assert_fails(folder, ".memory: symbolic link, not followed")
+
+    def test_an_escaped_u_2029_fails(self):
+        self.assert_fails(self.evidence("a\\u2029b"), f"{self.NAME}: not in canonical form")
+
+    def test_a_lowercase_lone_trail_surrogate_escape_passes(self):
+        check_b2(self.evidence("a\\udc00b"))
+
+    def test_an_infinity_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": Infinity')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid JSON")
+
+    def test_a_negative_infinity_value_fails(self):
+        body = self.GOOD.replace('"promoted_to": ""', '"promoted_to": -Infinity')
+        self.assert_fails(self.corrections(body), f"{self.NAME}: invalid JSON")
+
+    def test_an_escaped_delete_fails(self):
+        self.assert_fails(self.evidence("a\\u007fb"), f"{self.NAME}: not in canonical form")
 
 
 class RiskPathGlobTest(unittest.TestCase):
