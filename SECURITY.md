@@ -44,7 +44,7 @@ In scope:
   release's `checksums.txt`, and the build attestation of the artifact at the
   release tag;
 - the workflows in [`.github/workflows/`](.github/workflows/) and the token
-  permissions they grant: the bump, the `brew pr-pull` publish, `brew
+  permissions they grant: the bump, `brew
   test-bot`, the CI gate and the risk-paths caller;
 - the Homebrew tarball release that
   [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml)

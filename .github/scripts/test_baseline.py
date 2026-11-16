@@ -33,7 +33,7 @@ substring:
   syntax, no duplicate glob, and a `why` that is at most 200 characters and
   names a category. Rule C with levels: every glob that matches the list or the
   caller is L1 or L2. The required paths of this repository must match a glob:
-  the list itself, the caller, the bump, tarball and publish workflows, the
+  the list itself, the caller, the bump and tarball workflows, the
   bump script and the 2 casks. The caller calls core's `pr-triage.yml` at a
   40-character commit SHA, on `pull_request_target`, with the type `labeled`,
   in a job named `pr-triage`, and with top-level `permissions: {}`.
@@ -98,7 +98,6 @@ REQUIRED_RISK_PATHS = (
     RISK_LIST,
     ".github/workflows/bump.yml",
     ".github/workflows/brew-tarball.yml",
-    ".github/workflows/publish.yml",
     ".github/scripts/bump_casks.py",
     "Casks/chairlift.rb",
     "Casks/nsl.rb",

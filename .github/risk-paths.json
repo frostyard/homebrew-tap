@@ -10,7 +10,7 @@
     {
       "glob": ".github/workflows/**",
       "level": "L1",
-      "why": "publication: the bump, pr-pull, test-bot, tarball release and risk-paths workflows, and their token permissions"
+      "why": "publication: the bump, test-bot, tarball release and risk-paths workflows, and their token permissions"
     },
     {
       "glob": ".github/scripts/**",
