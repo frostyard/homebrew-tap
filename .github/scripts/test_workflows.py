@@ -24,6 +24,30 @@ def check_workflow_dispatch(text):
     return False
 
 
+def top_level_events(text):
+    """Return the event names of the top-level block-style ``on:`` key."""
+    lines = text.splitlines()
+    if "on:" not in lines:
+        return []
+
+    events = []
+    for line in lines[lines.index("on:") + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            break
+        match = re.fullmatch(r"  ([\w-]+):.*", line.rstrip())
+        if match:
+            events.append(match.group(1))
+
+    return events
+
+
+# The frostyard Actions policy allows pull_request_target only for the PR
+# triage caller (frostyard/core docs/design/pull-request-target-policy.md).
+PULL_REQUEST_TARGET_ALLOWED = {"risk-paths.yml"}
+
+
 def job_lines(text, job):
     """Return the lines of one job's block, or [] when the job is absent."""
     lines = text.splitlines()
@@ -277,6 +301,44 @@ class BumpPullRequestChecksTests(unittest.TestCase):
         self.assertTrue(check_job_permission(with_actions, "bump", "actions"))
         self.assertFalse(check_job_permission(with_actions, "bump", "pull-requests"))
         self.assertFalse(check_job_permission(with_actions, "other", "actions"))
+
+
+class PullRequestTargetTests(unittest.TestCase):
+    def test_only_the_caller_runs_on_pull_request_target(self):
+        workflow_dir = Path(__file__).resolve().parent.parent / "workflows"
+        workflows = sorted(
+            set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml"))
+        )
+        self.assertGreaterEqual(len(workflows), 6)
+
+        callers = []
+        for workflow in workflows:
+            events = top_level_events(workflow.read_text(encoding="utf-8"))
+            with self.subTest(workflow=workflow.name):
+                self.assertNotEqual(events, [], "no event found under on:")
+                if "pull_request_target" in events:
+                    callers.append(workflow.name)
+                    self.assertIn(workflow.name, PULL_REQUEST_TARGET_ALLOWED)
+        self.assertEqual(callers, ["risk-paths.yml"])
+
+    def test_publish_runs_on_pull_request_labeled(self):
+        workflow = Path(__file__).resolve().parent.parent / "workflows" / "publish.yml"
+        text = workflow.read_text(encoding="utf-8")
+        self.assertEqual(top_level_events(text), ["pull_request"])
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
+
+    def test_pull_request_target_fixture_is_found(self):
+        text = """name: x
+
+on:
+  pull_request_target:
+    types: [labeled]
+  push:
+
+jobs:
+  x:
+"""
+        self.assertEqual(top_level_events(text), ["pull_request_target", "push"])
 
 
 if __name__ == "__main__":

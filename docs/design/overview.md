@@ -127,13 +127,15 @@ started by a dispatch: it runs at the first label, edit or reopen from a person
 or the machine account.
 
 [`publish.yml`](../../.github/workflows/publish.yml) runs on
-`pull_request_target` with the type `labeled`, and its job runs only when the
-pull request has the label `pr-pull`:
+`pull_request` with the type `labeled`, and its job runs only when the pull
+request has the label `pr-pull` and its head is a branch of this repository.
+It does not use `pull_request_target`: only the PR triage caller may
+([core: pull_request_target event policy](https://github.com/frostyard/core/blob/main/docs/design/pull-request-target-policy.md)).
 
 1. `brew pr-pull --debug --tap="$GITHUB_REPOSITORY" "<number>"` pulls the
    bottles and the cask changes of the pull request.
 2. `Homebrew/actions/git-try-push` pushes the result to `main`.
-3. The branch is deleted, unless the pull request comes from a fork.
+3. The branch is deleted.
 
 A pull request without that label is merged as it is and does not run this
 workflow. A review moves a pull request to `pr-pull`; the label is the merge
