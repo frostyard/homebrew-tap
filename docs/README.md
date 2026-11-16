@@ -27,3 +27,5 @@ The root [README.md](../README.md) is the front page. It follows core's
   workflows and the scripts that are in the tree.
 - Cross-links go in both directions.
 - The root `README.md` links here; the rules and the details do not go in it.
+
+The tap is a public repository.
