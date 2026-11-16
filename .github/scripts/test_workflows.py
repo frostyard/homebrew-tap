@@ -67,17 +67,16 @@ PULL_REQUEST_TARGET_ALLOWED = {"risk-paths.yml"}
 
 
 def mentions_pull_request_target(text):
-    """True when a line names ``pull_request_target`` outside a comment.
+    """True when the text names ``pull_request_target`` anywhere.
 
-    It fails closed: it does not parse the ``on:`` key, so every form of the
-    trigger counts (a scalar, a flow or block list, a mapping key, a quoted
-    key), and so does the word in a script. A ``#`` and the text after it on
-    a line are a comment. A longer name that holds the word is not a match.
+    It fails closed: it parses no YAML and strips no comment, so every form
+    of the trigger counts (a scalar, a flow or block list, a mapping key, a
+    quoted key, an anchor), and so does the word in a comment, a quoted value
+    or a script. Only a longer name that holds the word is not a match. A
+    workflow that must name the event in a comment cannot: write "the
+    target event" instead.
     """
-    for line in text.lstrip("\ufeff").splitlines():
-        if PULL_REQUEST_TARGET.search(line.split("#", 1)[0]):
-            return True
-    return False
+    return PULL_REQUEST_TARGET.search(text) is not None
 
 
 def check_defaults(text):
@@ -327,6 +326,11 @@ class PullRequestTargetTests(unittest.TestCase):
             "bom": "\ufeffon: pull_request_target\n",
             "no final newline": "on: pull_request_target",
             "crlf": "on:\r\n  pull_request_target:\r\n",
+            "hash in a quoted value": 'on: {push: {branches: ["release#1"]}, pull_request_target: {}}\n',
+            "flow mapping": "on: {pull_request_target: {types: [labeled]}}\n",
+            "anchor": "name: &event pull_request_target\non: [*event]\n",
+            "block scalar": "jobs:\n  a:\n    steps:\n      - run: |\n          echo pull_request_target\n",
+            "comment only": "# pull_request_target is not used\non:\n  pull_request:\n",
         }
         for name, text in found.items():
             with self.subTest(name=name):
@@ -334,7 +338,6 @@ class PullRequestTargetTests(unittest.TestCase):
 
         not_found = {
             "empty": "",
-            "comment only": "# pull_request_target is not used\non:\n  pull_request:\n",
             "other event": "on:\n  pull_request:\n    types: [labeled]\n",
             "longer name": "on:\n  pull_request_target_x:\n",
             "hyphen prefix": "env:\n  NAME: no-pull_request_target\n",
