@@ -124,7 +124,11 @@ on a `workflow_dispatch` of a bump branch: `mise` installs Python 3.12.16 from
 The dispatch is how a bump pull request gets its `Test` and `test-bot` checks.
 `PR triage` ([`risk-paths.yml`](../../.github/workflows/risk-paths.yml)) is not
 started by a dispatch: it runs at the first label, edit or reopen from a person
-or the machine account.
+or the machine account. It runs on `pull_request_target`, which GitHub blocks
+by default in a public repository from 2026-12-02. An Actions policy of the
+frostyard organization allows that event for the caller path only
+([core: pull_request_target policy](https://github.com/frostyard/core/blob/main/docs/design/pull-request-target-policy.md));
+keep the file name `risk-paths.yml`, or the policy no longer covers it.
 
 [`publish.yml`](../../.github/workflows/publish.yml) runs on
 `pull_request_target` with the type `labeled`, and its job runs only when the
