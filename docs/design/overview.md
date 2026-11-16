@@ -16,7 +16,7 @@ application; the tap carries the release facts forward to a user's machine.
 ```
 nsl release ──► GoReleaser (in frostyard/nsl) ──► bump/nsl-<version> PR
 other release ──► bump.yml (bump_casks.py) ──► bump/<item>-<version> PR
-  ──► brew test-bot (tests.yml) ──► merge, or brew pr-pull with the label pr-pull (publish.yml) ──► main
+  ──► brew test-bot (tests.yml) ──► a person merges the pull request ──► main
 main ──► brew install --cask <item>
 ```
 
@@ -104,7 +104,7 @@ request. The step summary gets a Markdown table with 1 row per item. The pull
 request body names the old and the new sha256 of each asset and the 3 checks
 above.
 
-## 3. A pull request is tested, then published
+## 3. A pull request is tested, then merged
 
 [`tests.yml`](../../.github/workflows/tests.yml) runs `brew test-bot` on a push
 to `main`, on every pull request and on a `workflow_dispatch` of a bump
@@ -124,20 +124,19 @@ on a `workflow_dispatch` of a bump branch: `mise` installs Python 3.12.16 from
 The dispatch is how a bump pull request gets its `Test` and `test-bot` checks.
 `PR triage` ([`risk-paths.yml`](../../.github/workflows/risk-paths.yml)) is not
 started by a dispatch: it runs at the first label, edit or reopen from a person
-or the machine account.
+or the machine account. It runs on `pull_request_target`, which GitHub blocks
+by default in a public repository from 2026-12-02. An Actions policy of the
+frostyard organization allows that event for the caller path only
+([core: pull_request_target policy](https://github.com/frostyard/core/blob/main/docs/design/pull-request-target-policy.md));
+keep the file name `risk-paths.yml`, or the policy no longer covers it. No
+other workflow of the tap runs on `pull_request_target`, and
+[`test_workflows.py`](../../.github/scripts/test_workflows.py) fails when one
+does.
 
-[`publish.yml`](../../.github/workflows/publish.yml) runs on
-`pull_request_target` with the type `labeled`, and its job runs only when the
-pull request has the label `pr-pull`:
-
-1. `brew pr-pull --debug --tap="$GITHUB_REPOSITORY" "<number>"` pulls the
-   bottles and the cask changes of the pull request.
-2. `Homebrew/actions/git-try-push` pushes the result to `main`.
-3. The branch is deleted, unless the pull request comes from a fork.
-
-A pull request without that label is merged as it is and does not run this
-workflow. A review moves a pull request to `pr-pull`; the label is the merge
-switch.
+A person merges a reviewed pull request as it is. No workflow pushes to
+`main`: the default branch takes changes only through a pull request with an
+approval and the required check `Test`. The tap has no `brew pr-pull` step:
+it has no formula, so no bottle to pull.
 
 ## 4. The Homebrew tarball
 

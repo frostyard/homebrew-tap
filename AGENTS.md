@@ -17,7 +17,6 @@ file.
 | --- | --- |
 | [`Casks/`](Casks/) | The casks users install: `chairlift.rb` and `nsl.rb`. |
 | [`.github/workflows/bump.yml`](.github/workflows/bump.yml) | Daily run of `bump_casks.py`; it opens 1 pull request per stale cask or formula and never pushes to the base branch. |
-| [`.github/workflows/publish.yml`](.github/workflows/publish.yml) | `brew pr-pull` for a pull request that carries the label `pr-pull`. |
 | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | `brew test-bot` on a push to `main`, on every pull request, and on a `workflow_dispatch` that `bump_casks.py` starts on a bump branch. |
 | [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml) | Builds a Homebrew tarball for Linux and uploads it to a GitHub release, each Tuesday. |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs `make ci` on every pull request, and on a `workflow_dispatch` that `bump_casks.py` starts on a bump branch. |
@@ -81,11 +80,16 @@ use the Python standard library only. `mise.toml` and `mise.lock` pin Python
   runs `--only-tap-syntax` on the tap and `--only-formulae` on a pull
   request. It does not install a cask: a cask installs an existing binary
   release.
-- A pull request that is ready to merge gets the label `pr-pull`. That label
-  starts [`.github/workflows/publish.yml`](.github/workflows/publish.yml),
-  which runs `brew pr-pull` on the pull request, pushes the result to `main`
-  and deletes the branch. A pull request with no `pr-pull` label is merged as
-  it is.
+- A person merges a reviewed pull request as it is. No workflow pushes to
+  `main`: the default branch takes changes only through a pull request.
+- Only [`.github/workflows/risk-paths.yml`](.github/workflows/risk-paths.yml)
+  runs on `pull_request_target`. GitHub blocks that event by default in a
+  public repository from 2026-12-02, and the organization's Actions policy
+  allows it for the caller path only
+  ([core: pull_request_target policy](https://github.com/frostyard/core/blob/main/docs/design/pull-request-target-policy.md)).
+  A new workflow uses `pull_request`; `.github/scripts/test_workflows.py`
+  fails for any other `pull_request_target` workflow. Keep the caller's file
+  name, or the policy no longer covers it.
 - A pull request that touches a path in
   [`.github/risk-paths.json`](.github/risk-paths.json) gets 1 level label,
   `level:L1` to `level:L4`; L1 and L2 also get `risk:high` (core ADR-0068,

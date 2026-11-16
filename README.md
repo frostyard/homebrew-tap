@@ -40,7 +40,7 @@ An application's release is the source of a cask's version and its sha256.
 daily [bump workflow](.github/workflows/bump.yml), which downloads each new
 asset, verifies its sha256, its line in the release's `checksums.txt` (when
 the release has one) and its build attestation, and opens 1 pull request per cask. [brew test-bot](.github/workflows/tests.yml)
-checks every pull request, the label `pr-pull` merges it with `brew pr-pull`,
+checks every pull request, a person merges it after review,
 and [docs/design/overview.md](docs/design/overview.md) has the flow.
 
 ## Credits

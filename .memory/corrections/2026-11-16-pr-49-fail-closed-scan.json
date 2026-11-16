@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-16",
+  "scope": ".github/scripts/test_workflows.py mentions_pull_request_target",
+  "correction": "A text guard that must fail closed strips nothing: splitting a line at # also cut a quoted value such as \"release#1\" and the trigger after it, so a forbidden pull_request_target passed. The guard now matches the word anywhere in the file, comments included (cross-review finding).",
+  "evidence": "frostyard/homebrew-tap#49 cross-review: on: {push: {branches: [\"release#1\"]}, pull_request_target: {}} passed the first version of the guard",
+  "promoted_to": ".github/scripts/test_workflows.py test_pull_request_target_fixtures (hash in a quoted value, flow mapping, anchor, block scalar, comment)"
+}

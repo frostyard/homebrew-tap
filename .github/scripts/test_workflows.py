@@ -57,6 +57,28 @@ def check_job_permission(text, job, scope):
     return False
 
 
+PULL_REQUEST_TARGET = re.compile(r"(?<![\w-])pull_request_target(?![\w-])")
+
+# The only workflow that may run on pull_request_target: the PR triage caller.
+# GitHub blocks that event by default in a public repository from 2026-12-02,
+# and the organization's Actions policy allows it for the caller path only
+# (frostyard/core docs/design/pull-request-target-policy.md).
+PULL_REQUEST_TARGET_ALLOWED = {"risk-paths.yml"}
+
+
+def mentions_pull_request_target(text):
+    """True when the text names ``pull_request_target`` anywhere.
+
+    It fails closed: it parses no YAML and strips no comment, so every form
+    of the trigger counts (a scalar, a flow or block list, a mapping key, a
+    quoted key, an anchor), and so does the word in a comment, a quoted value
+    or a script. Only a longer name that holds the word is not a match. A
+    workflow that must name the event in a comment cannot: write "the
+    target event" instead.
+    """
+    return PULL_REQUEST_TARGET.search(text) is not None
+
+
 def check_defaults(text):
     """Require a top-level defaults block with bash run shell."""
     lines = text.splitlines()
@@ -115,7 +137,6 @@ class WorkflowShellTests(unittest.TestCase):
             "brew-tarball.yml",
             "bump.yml",
             "ci.yml",
-            "publish.yml",
             "risk-paths.yml",
             "tests.yml",
         ):
@@ -277,6 +298,53 @@ class BumpPullRequestChecksTests(unittest.TestCase):
         self.assertTrue(check_job_permission(with_actions, "bump", "actions"))
         self.assertFalse(check_job_permission(with_actions, "bump", "pull-requests"))
         self.assertFalse(check_job_permission(with_actions, "other", "actions"))
+
+
+class PullRequestTargetTests(unittest.TestCase):
+    def test_only_the_triage_caller_uses_pull_request_target(self):
+        workflow_dir = Path(__file__).resolve().parent.parent / "workflows"
+        workflows = sorted(
+            set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml"))
+        )
+        users = {
+            workflow.name
+            for workflow in workflows
+            if mentions_pull_request_target(workflow.read_text(encoding="utf-8"))
+        }
+        # The caller must keep the event: without it, this check passes on
+        # an empty set and proves nothing.
+        self.assertEqual(users, PULL_REQUEST_TARGET_ALLOWED)
+
+    def test_pull_request_target_fixtures(self):
+        found = {
+            "scalar": "on: pull_request_target\n",
+            "flow list": "on: [push, pull_request_target]\n",
+            "block list": "on:\n  - push\n  - pull_request_target\n",
+            "mapping": "on:\n  pull_request_target:\n    types: [labeled]\n",
+            "quoted key": "'on':\n  \"pull_request_target\": {}\n",
+            "comment after": "on:\n  pull_request_target: # base\n",
+            "bom": "\ufeffon: pull_request_target\n",
+            "no final newline": "on: pull_request_target",
+            "crlf": "on:\r\n  pull_request_target:\r\n",
+            "hash in a quoted value": 'on: {push: {branches: ["release#1"]}, pull_request_target: {}}\n',
+            "flow mapping": "on: {pull_request_target: {types: [labeled]}}\n",
+            "anchor": "name: &event pull_request_target\non: [*event]\n",
+            "block scalar": "jobs:\n  a:\n    steps:\n      - run: |\n          echo pull_request_target\n",
+            "comment only": "# pull_request_target is not used\non:\n  pull_request:\n",
+        }
+        for name, text in found.items():
+            with self.subTest(name=name):
+                self.assertTrue(mentions_pull_request_target(text))
+
+        not_found = {
+            "empty": "",
+            "other event": "on:\n  pull_request:\n    types: [labeled]\n",
+            "longer name": "on:\n  pull_request_target_x:\n",
+            "hyphen prefix": "env:\n  NAME: no-pull_request_target\n",
+        }
+        for name, text in not_found.items():
+            with self.subTest(name=name):
+                self.assertFalse(mentions_pull_request_target(text))
 
 
 if __name__ == "__main__":
