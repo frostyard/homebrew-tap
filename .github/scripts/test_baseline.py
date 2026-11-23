@@ -37,6 +37,12 @@ substring:
   bump script and the 2 casks. The caller calls core's `pr-triage.yml` at a
   40-character commit SHA, on `pull_request_target`, with the type `labeled`,
   in a job named `pr-triage`, and with top-level `permissions: {}`.
+  B6 reads the caller at `.github/workflows/risk-paths.yml` by path, and also
+  checks the dispatch caller `.github/workflows/pr-triage-dispatch.yml` (core
+  docs/specs/pr-triage.md rule A2, core ADR-0087): only `workflow_dispatch`,
+  top-level `permissions: {}`, the 1 job `pr-triage` with exactly
+  `contents: read` and `pull-requests: write`, and the same core pin and comment as
+  `risk-paths.yml`.
 - B10: `LICENSE` is MIT or GPL-3.0. The repository's license metadata on
   GitHub (`gh api repos/<owner>/<repo> --jq .license.spdx_id`) is outside this
   check: the tree cannot show it.
@@ -103,6 +109,7 @@ REQUIRED_RISK_PATHS = (
     "Casks/nsl.rb",
 )
 CALLER = ".github/workflows/risk-paths.yml"
+DISPATCH_CALLER = ".github/workflows/pr-triage-dispatch.yml"
 PERMISSION_ITEM = re.compile(r"^(\s+)([\w-]+):\s*(\S+)\s*$")
 LIST_ITEM = re.compile(r"^(\s*)-(?:\s(.*))?$")
 USES = re.compile(r"^\s*(?:-\s+)?uses:\s+(\S+)")
@@ -336,8 +343,8 @@ def job_blocks(text):
     return blocks
 
 
-def job_uses(block_lines):
-    """The value of a job's ``uses:`` key at indent 4, without its comment.
+def job_uses(block_lines, keep_comment=False):
+    """The value of a job's ``uses:`` key at indent 4, optionally with its comment.
 
     None when the job has no such key. A blank or comment-only line at any
     indent is skipped, and a line under a ``run: |`` or ``run: >`` block scalar
@@ -357,11 +364,67 @@ def job_uses(block_lines):
             block_indent = -1
         found = JOB_USES.match(line)
         if found:
+            if keep_comment:
+                return found.group(1).strip()
             return re.sub(r"[ \t]+#.*$", "", found.group(1)).strip()
         started = BLOCK_SCALAR.match(line)
         if started:
             block_indent = len(started.group(1))
     return None
+
+
+def job_permissions(block_lines):
+    """A job's indent-4 permissions: (inline value, scope dict), rejecting duplicates."""
+    for index, line in enumerate(block_lines):
+        if not line.startswith("    permissions:"):
+            continue
+        value = without_comment(line.split(":", 1)[1]).strip()
+        if value:
+            return value, {}
+        scopes = {}
+        for following in block_lines[index + 1:]:
+            if not following.strip() or following.lstrip().startswith("#"):
+                continue
+            indent = len(following) - len(following.lstrip())
+            item = PERMISSION_ITEM.match(" " * indent + without_comment(following))
+            if not item or len(item.group(1)) != 6:
+                break
+            key = item.group(2)
+            if key in scopes:
+                return "", None
+            scopes[key] = without_comment(item.group(3))
+        return "", scopes
+    return None, {}
+
+
+def check_dispatch_caller(root):
+    """The workflow_dispatch caller follows core's PR triage rule A2."""
+    name = Path(DISPATCH_CALLER).name
+    text = read(root, DISPATCH_CALLER)
+    if text is None:
+        fail("B6", f"{name} is missing")
+    if workflow_events(text) != ["workflow_dispatch"]:
+        fail("B6", f"{name} must run only on workflow_dispatch")
+    lines = {line.rstrip() for line in text.splitlines()}
+    if not {"    inputs:", "      pr:", "        required: true", "        type: string"} <= lines:
+        fail("B6", f"{name} must have the required string input pr")
+    if top_permissions(text)[0] != "{}":
+        fail("B6", f"{name} does not set top-level permissions: {{}}")
+    blocks = job_blocks(text)
+    if list(blocks) != [CALLER_JOB]:
+        fail("B6", f"{name} must have only the job pr-triage")
+    block = blocks[CALLER_JOB]
+    inline, scopes = job_permissions(block)
+    if inline != "" or scopes != {"contents": "read", "pull-requests": "write"}:
+        fail("B6", f"{name} must grant exactly contents: read and pull-requests: write")
+    if not PINNED_USES.fullmatch(job_uses(block) or ""):
+        fail("B6", f"{name} must call frostyard/core/.github/workflows/pr-triage.yml at a commit SHA")
+    caller_block = job_blocks(read(root, CALLER) or "").get(CALLER_JOB, [])
+    if job_uses(block, keep_comment=True) != job_uses(caller_block, keep_comment=True):
+        fail("B6", f"{name} must pin the same core commit and comment as risk-paths.yml")
+    lines = {line.rstrip() for line in block}
+    if not {"    with:", "      pr: ${{ inputs.pr }}", "      dependabot-shadow: false"} <= lines:
+        fail("B6", f"{name} must pass pr: ${{{{ inputs.pr }}}} and dependabot-shadow: false")
 
 
 def check_b1(root):
@@ -736,10 +799,12 @@ def check_b6(root):
         for glob, (_, level) in globs.items():
             if match(glob, required) and level not in STRICT_LEVELS:
                 fail("B6", f"the glob {glob!r} matches {required} and must be L1 or L2, not {level}")
-    caller = next(((path, text) for path, text in workflows(root) if CORE_PR_TRIAGE.search(text)), None)
-    if caller is None:
-        fail("B6", "no workflow calls frostyard/core/.github/workflows/pr-triage.yml at a commit SHA")
-    path, caller_text = caller
+    caller_text = read(root, CALLER)
+    if caller_text is None:
+        fail("B6", f"{CALLER} is missing")
+    if not CORE_PR_TRIAGE.search(caller_text):
+        fail("B6", f"{CALLER} does not call frostyard/core/.github/workflows/pr-triage.yml at a commit SHA")
+    path = Path(CALLER)
     if "pull_request_target" not in workflow_events(caller_text):
         fail("B6", f"{path.name} does not run on pull_request_target")
     value, _ = top_permissions(caller_text)
@@ -762,6 +827,8 @@ def check_b6(root):
         fail("B6", f"{path.name}: the uses: of the job {CALLER_JOB} must be "
                    f"frostyard/core/.github/workflows/pr-triage.yml@<40-character commit SHA>, "
                    f"not {uses!r}")
+
+    check_dispatch_caller(root)
 
 
 def check_b7(root):
@@ -1642,15 +1709,115 @@ class NegativeTest(unittest.TestCase):
         self.break_file(CALLER, "workflows/pr-triage.yml@", "workflows/risk-paths.yml@")
         self.assert_broken("B6")
 
-    def core_pin(self):
+    def test_b6_dispatch_missing(self):
+        (self.root / DISPATCH_CALLER).unlink()
+        self.assert_broken_because("B6", "is missing")
+
+    def test_b6_dispatch_extra_trigger(self):
+        self.break_file(DISPATCH_CALLER, 'on:\n  workflow_dispatch:\n', 'on:\n  push:\n  workflow_dispatch:\n')
+        self.assert_broken_because("B6", 'must run only on workflow_dispatch')
+
+    def test_b6_dispatch_replaced_trigger(self):
+        text = read(self.root, DISPATCH_CALLER)
+        start = text.index("on:\n")
+        end = text.index("\npermissions:", start)
+        self.break_file(DISPATCH_CALLER, text[start:end], "on:\n  pull_request:\n")
+        self.assert_broken_because("B6", "must run only on workflow_dispatch")
+
+    def test_b6_dispatch_optional_pr(self):
+        self.break_file(DISPATCH_CALLER, '        required: true', '        required: false')
+        self.assert_broken_because("B6", 'must have the required string input pr')
+
+    def test_b6_dispatch_top_permissions(self):
+        self.break_file(DISPATCH_CALLER, '\npermissions: {}\n', '\npermissions: read-all\n')
+        self.assert_broken_because("B6", 'top-level permissions: {}')
+
+    def test_b6_dispatch_extra_scope(self):
+        self.break_file(DISPATCH_CALLER, '      pull-requests: write\n', '      pull-requests: write\n      actions: write\n')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_missing_scope(self):
+        self.break_file(DISPATCH_CALLER, '      contents: read\n', '')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_weaker_scope(self):
+        self.break_file(DISPATCH_CALLER, '      pull-requests: write', '      pull-requests: read')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_inline_permissions(self):
+        self.break_file(DISPATCH_CALLER, '    permissions:\n      contents: read\n      pull-requests: write\n', '    permissions: write-all\n')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_no_permissions(self):
+        self.break_file(DISPATCH_CALLER, '    permissions:\n      contents: read\n      pull-requests: write\n', '')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_duplicate_scope(self):
+        self.break_file(DISPATCH_CALLER, '      contents: read\n', '      contents: read\n      contents: read\n')
+        self.assert_broken_because("B6", 'must grant exactly')
+
+    def test_b6_dispatch_another_job(self):
+        self.break_file(DISPATCH_CALLER, '  pr-triage:\n', '  triage:\n')
+        self.assert_broken_because("B6", 'must have only the job pr-triage')
+
+    def test_b6_dispatch_second_job(self):
+        text = read(self.root, DISPATCH_CALLER)
+        pin = job_uses(job_blocks(text)[CALLER_JOB], keep_comment=True)
+        self.break_file(DISPATCH_CALLER, text, text + "  other:\n    uses: " + pin + "\n")
+        self.assert_broken_because("B6", "must have only the job pr-triage")
+
+    def test_b6_dispatch_branch_pin(self):
+        self.break_file(DISPATCH_CALLER, self.core_pin(DISPATCH_CALLER),
+                        "frostyard/core/.github/workflows/pr-triage.yml@main")
+        self.assert_broken_because("B6", "at a commit SHA")
+
+    def test_b6_dispatch_another_sha(self):
+        sha = self.core_pin(DISPATCH_CALLER).rsplit("@", 1)[1]
+        self.break_file(DISPATCH_CALLER, sha, "0" * 40)
+        self.assert_broken_because("B6", "same core commit and comment")
+
+    def test_b6_dispatch_another_comment(self):
+        pin = job_uses(job_blocks(read(self.root, DISPATCH_CALLER))[CALLER_JOB], keep_comment=True)
+        self.assertIn(" # ", pin)
+        self.break_file(DISPATCH_CALLER, pin, pin.split(" # ", 1)[0] + " # v0")
+        self.assert_broken_because("B6", "same core commit and comment")
+
+    def test_b6_dispatch_missing_shadow(self):
+        self.break_file(DISPATCH_CALLER, '      dependabot-shadow: false\n', '')
+        self.assert_broken_because("B6", 'must pass pr:')
+
+    def test_b6_dispatch_wrong_pr(self):
+        self.break_file(DISPATCH_CALLER, '      pr: ${{ inputs.pr }}', '      pr: ${{ github.event.inputs.pr }}')
+        self.assert_broken_because("B6", 'must pass pr:')
+
+    def test_b6_dispatch_still_checks_risk_paths(self):
+        self.break_file(CALLER, "reopened, edited, labeled]", "reopened, edited]")
+        self.assert_broken_because("B6", "risk-paths.yml does not list the type labeled")
+
+    def test_b6_dispatch_permissions_scopes(self):
+        self.assertEqual(job_permissions(['    permissions:', '      contents: read', '      pull-requests: write']), ('', {'contents': 'read', 'pull-requests': 'write'}))
+
+    def test_b6_dispatch_permissions_inline(self):
+        self.assertEqual(job_permissions(['    permissions: write-all']), ('write-all', {}))
+
+    def test_b6_dispatch_permissions_absent(self):
+        self.assertEqual(job_permissions(['    uses: workflow']), (None, {}))
+
+    def test_b6_dispatch_permissions_duplicate(self):
+        self.assertEqual(job_permissions(['    permissions:', '      contents: read', '      contents: read']), ('', None))
+
+    def test_b6_dispatch_permissions_comment(self):
+        self.assertEqual(job_permissions(['    permissions:', '      contents: read # scope']), ('', {'contents': 'read'}))
+
+    def core_pin(self, name=CALLER):
         """The pinned core reusable workflow of the caller, as it is now.
 
         A core bump changes the SHA and its date comment; a negative test that
         names a fixed SHA breaks on each bump, so read the pin from the file.
         """
-        text = (self.root / CALLER).read_text(encoding="utf-8")
+        text = (self.root / name).read_text(encoding="utf-8")
         found = re.search(r"frostyard/core/\.github/workflows/pr-triage\.yml@[0-9a-f]{40}", text)
-        self.assertIsNotNone(found, f"{CALLER} has no pinned pr-triage.yml caller")
+        self.assertIsNotNone(found, f"{name} has no pinned pr-triage.yml caller")
         return found.group(0)
 
     def test_b6_a_caller_on_a_core_branch(self):
@@ -1676,7 +1843,8 @@ class NegativeTest(unittest.TestCase):
         self.assert_broken_because("B6", "must set uses: at indent 4")
 
     def test_b6_a_caller_with_comments_before_its_uses(self):
-        (self.root / CALLER).write_text(COMMENTED_CALLER.replace("{pin}", self.core_pin()),
+        (self.root / CALLER).write_text(COMMENTED_CALLER.replace("{pin}", job_uses(
+            job_blocks(read(self.root, CALLER))[CALLER_JOB], keep_comment=True)),
                                         encoding="utf-8")
         check_b6(self.root)
 

@@ -57,7 +57,7 @@ class FakeGh:
         self.created_prs: list[dict] = []
         self.open_prs: dict[str, str] = {}
         self.attested: list[tuple[str, str]] = []
-        self.dispatched: list[tuple[str, str, str]] = []
+        self.dispatched: list[tuple[str, str, str, dict[str, str]]] = []
 
     def release(self, slug: str, tag: str | None = None) -> dict | None:
         """Return the fixture payload for a slug and tag."""
@@ -88,10 +88,10 @@ class FakeGh:
         """Return the fixture open PR number for a head branch, if any."""
         return self.open_prs.get(head)
 
-    def dispatch_workflow(self, slug: str, workflow: str, ref: str) -> None:
+    def dispatch_workflow(self, slug, workflow, ref, inputs=None):
         """Record a dispatched check workflow; fail the names in the fixture."""
         self.calls.append(("dispatch", slug, workflow, ref))
-        self.dispatched.append((slug, workflow, ref))
+        self.dispatched.append((slug, workflow, ref, dict(inputs or {})))
         if workflow in self.fail_dispatch:
             raise RuntimeError("HTTP 403: Resource not accessible by integration")
 
@@ -192,11 +192,11 @@ class BumpTestCase(unittest.TestCase):
         self.output = captured.getvalue()
         return result
 
-    def bumper(self, gh: FakeGh, dry_run: bool = True, git: FakeGit | None = None) -> bc.Bumper:
+    def bumper(self, gh: FakeGh, dry_run: bool = True, git: FakeGit | None = None, base_ref: str = "main") -> bc.Bumper:
         """Return a Bumper wired to the fakes; brew style is a no-op."""
         return bc.Bumper(
             tap_dir=self.tap,
-            base_ref="main",
+            base_ref=base_ref,
             dry_run=dry_run,
             gh=gh,
             style=lambda path: None,
@@ -543,6 +543,10 @@ class PullRequestTests(BumpTestCase):
             index = git.calls.index(("add", f"Casks/{name}.rb"))
             self.assertEqual(git.calls[index + 1], ("commit", "-m", f"fix(cask): bump {name} to v0.2.0"))
         self.assertEqual([pr["head"] for pr in gh.created_prs], ["bump/alpha-0.2.0", "bump/beta-0.2.0"])
+        self.assertEqual([call for call in gh.dispatched if call[1] == "pr-triage-dispatch.yml"], [
+            ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "1"}),
+            ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "2"}),
+        ])
 
     def test_existing_branch_is_pr_exists_and_opens_nothing(self) -> None:
         text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
@@ -573,14 +577,19 @@ class PullRequestTests(BumpTestCase):
         gh = FakeGh(releases, blobs)
         result = self.run_item(self.bumper(gh, dry_run=False, git=FakeGit()), path, "cask")
         self.assertEqual(result.status, "bumped")
-        self.assertEqual([call[0] for call in gh.calls if call[0] == "dispatch"], ["dispatch", "dispatch"])
+        self.assertEqual([call[0] for call in gh.calls if call[0] == "dispatch"], ["dispatch", "dispatch", "dispatch"])
         self.assertEqual(
             gh.dispatched,
             [
-                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2"),
-                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2"),
+                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2", {}),
+                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2", {}),
+                ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "1"}),
             ],
         )
+        self.assertNotIn("PR triage did not start", result.detail)
+        triage_call = ("dispatch", "frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main")
+        self.assertLess(next(i for i, call in enumerate(gh.calls) if call[0] == "create_pr"),
+                        gh.calls.index(triage_call))
         # The checks start on the pushed branch only after the PR exists.
         names = [call[0] for call in gh.calls]
         self.assertLess(names.index("create_pr"), names.index("dispatch"))
@@ -624,13 +633,84 @@ class PullRequestTests(BumpTestCase):
         self.assertEqual(
             gh.dispatched,
             [
-                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2"),
-                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2"),
+                ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2", {}),
+                ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2", {}),
+                ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "1"}),
             ],
         )
         self.assertIn(("checkout", "--force", "main"), git.calls)
         self.assertIn(("reset", "--hard", "main"), git.calls)
         self.assertEqual(git.calls.count(("checkout", "--force", "main")), 1)
+
+    def test_triage_uses_the_base_ref(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        path = self.write("chairlift", text)
+        gh = FakeGh(releases, blobs)
+        result = self.run_item(self.bumper(gh, dry_run=False, base_ref="release"), path, "cask")
+        self.assertEqual(result.status, "bumped")
+        self.assertEqual(gh.dispatched, [
+            ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2", {}),
+            ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2", {}),
+            ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "release", {"pr": "1"}),
+        ])
+
+    def test_dry_run_dispatches_nothing(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        gh = FakeGh(releases, blobs)
+        result = self.run_item(self.bumper(gh), self.write("chairlift", text), "cask")
+        self.assertEqual(result.status, "verified")
+        self.assertEqual(gh.dispatched, [])
+
+    def test_triage_failure_only_warns_and_restores_once(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        gh = FakeGh(releases, blobs, fail_dispatch={"pr-triage-dispatch.yml"})
+        git = FakeGit()
+        result = self.run_item(self.bumper(gh, dry_run=False, git=git), self.write("chairlift", text), "cask")
+        self.assertEqual(result.status, "bumped")
+        self.assertFalse(result.failed)
+        self.assertIn("HTTP 403: Resource not accessible by integration", result.detail)
+        self.assertIn("gh workflow run pr-triage-dispatch.yml --repo frostyard/homebrew-tap --ref main -f pr=1", result.detail)
+        self.assertIn("::warning::chairlift: PR triage did not start", self.output)
+        self.assertEqual(git.calls.count(("checkout", "--force", "main")), 1)
+
+    def test_triage_failure_does_not_stop_the_next_item(self) -> None:
+        releases, blobs, paths = {}, {}, []
+        for name in ("alpha", "beta"):
+            text, item_releases, item_blobs = self.generic_fixture(name, "0.1.0", "0.2.0")
+            paths.append(self.write(name, text))
+            releases.update(item_releases)
+            blobs.update(item_blobs)
+        gh = FakeGh(releases, blobs, fail_dispatch={"pr-triage-dispatch.yml"})
+        bumper = self.bumper(gh, dry_run=False)
+        results = [self.run_item(bumper, path, "cask") for path in paths]
+        self.assertEqual([result.status for result in results], ["bumped", "bumped"])
+        self.assertEqual([call for call in gh.dispatched if call[1] == "pr-triage-dispatch.yml"], [
+            ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "1"}),
+            ("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "2"}),
+        ])
+
+    def test_unreadable_pr_number_only_warns(self) -> None:
+        text, releases, blobs, _ = self.chairlift_fixture("0.10.1", "0.11.2")
+        gh = FakeGh(releases, blobs)
+        gh.create_pr = lambda *_args: "https://github.com/frostyard/homebrew-tap/pull/abc"
+        result = self.run_item(self.bumper(gh, dry_run=False), self.write("chairlift", text), "cask")
+        self.assertEqual(result.status, "bumped")
+        self.assertEqual(gh.dispatched, [
+            ("frostyard/homebrew-tap", "ci.yml", "bump/chairlift-0.11.2", {}),
+            ("frostyard/homebrew-tap", "tests.yml", "bump/chairlift-0.11.2", {}),
+        ])
+        self.assertIn("cannot read the PR number", result.detail)
+        self.assertIn("cannot read the PR number", self.output)
+
+    def test_pr_number(self) -> None:
+        prefix = "https://github.com/frostyard/homebrew-tap/pull/"
+        for url, expected in [
+            (prefix + "12", "12"), (prefix + "0", None), (prefix + "007", None),
+            (prefix + "12/files", None), (prefix + "abc", None), ("", None),
+            (prefix + "12\n", "12"),
+        ]:
+            with self.subTest(url=url):
+                self.assertEqual(bc.pr_number(url), expected)
 
     def test_summary_table_lists_every_item(self) -> None:
         table = bc.summary_table(
@@ -688,6 +768,13 @@ class GhClientTests(BumpTestCase):
             calls,
             [["gh", "workflow", "run", "ci.yml", "--repo", "frostyard/homebrew-tap", "--ref", "bump/x-1.0.0"]],
         )
+
+    def test_dispatch_workflow_with_inputs_builds_the_exact_command(self) -> None:
+        calls: list[list[str]] = []
+        gh = bc.GhClient(runner=lambda argv: calls.append(argv) or "")
+        gh.dispatch_workflow("frostyard/homebrew-tap", "pr-triage-dispatch.yml", "main", {"pr": "12"})
+        self.assertEqual(calls, [["gh", "workflow", "run", "pr-triage-dispatch.yml", "--repo",
+                                 "frostyard/homebrew-tap", "--ref", "main", "-f", "pr=12"]])
 
     def test_dispatch_workflow_lets_runtime_error_through(self) -> None:
         def runner(_argv: list[str]) -> str:

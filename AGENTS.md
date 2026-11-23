@@ -21,6 +21,7 @@ file.
 | [`.github/workflows/brew-tarball.yml`](.github/workflows/brew-tarball.yml) | Builds a Homebrew tarball for Linux and uploads it to a GitHub release, each Tuesday. |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs `make ci` on every pull request, and on a `workflow_dispatch` that `bump_casks.py` starts on a bump branch. |
 | [`.github/workflows/risk-paths.yml`](.github/workflows/risk-paths.yml) | The caller of core's `pr-triage.yml` workflow: it adds the level label and `risk:high`. |
+| [`.github/workflows/pr-triage-dispatch.yml`](.github/workflows/pr-triage-dispatch.yml) | The `workflow_dispatch` caller of core's `pr-triage.yml` (core ADR-0087): `bump_casks.py` starts it for each bump pull request it opens. |
 | [`.github/scripts/bump_casks.py`](.github/scripts/bump_casks.py) | The bump script: version, sha256, verification, branch and pull request. |
 | [`.github/scripts/test_*.py`](.github/scripts/) | The unit tests of the bump script, the workflows and the baseline. |
 | [`docs/`](docs/README.md) | The documentation index: the design of the tap. |
@@ -46,8 +47,10 @@ file.
   skips a file that carries the GoReleaser marker, and it never commits to
   `main` itself. A pull request that the workflow `GITHUB_TOKEN` opens
   starts no `pull_request` run, so the script then starts `ci.yml` and
-  `tests.yml` on the branch with `gh workflow run` (#42). A person reviews
-  and merges that pull request.
+  `tests.yml` on the branch with `gh workflow run` (#42). It also starts
+  `pr-triage-dispatch.yml` on the base ref with the pull request's number,
+  so the pull request gets its level label (core ADR-0087); a failed triage
+  dispatch only warns. A person reviews and merges that pull request.
 - **`bump_casks.py` must stay able to bump both kinds.** It reads
   `Casks/*.rb` and `Formula/*.rb`, so keep that layout and keep the file name
   the branch token comes from.
@@ -100,6 +103,12 @@ use the Python standard library only. `mise.toml` and `mise.lock` pin Python
   `risk:high` label fails the job. The workflow removes `ready-for-human` when
   the head moves after the label, or when CI at the head is not green (core
   ADR-0077). Its body names each matched path and why the change is safe.
+  A bump pull request gets its level label from
+  [`.github/workflows/pr-triage-dispatch.yml`](.github/workflows/pr-triage-dispatch.yml),
+  which runs only `levels`, not readiness (core `docs/specs/pr-triage.md`
+  rule A2). It must pin the same core commit and comment as `risk-paths.yml`:
+  bump both in 1 pull request. `.github/scripts/test_baseline.py` (B6) fails
+  otherwise.
 - **A blocking review point adds a guard:** a test that fails without the fix,
   or a rule here when no test can catch it, plus 1 record file in
   `.memory/corrections/` ([`.memory/README.md`](.memory/README.md)).

@@ -96,6 +96,18 @@ shows them. A dispatch that fails is the status `dispatch-failed`: the run
 exits 1, and the row names the manual step `gh workflow run <workflow> --repo
 frostyard/homebrew-tap --ref <branch>`.
 
+Then the script starts
+[`pr-triage-dispatch.yml`](../../.github/workflows/pr-triage-dispatch.yml) on
+the base ref with `gh workflow run pr-triage-dispatch.yml --ref <base> -f
+pr=<number>`, where the number comes from the end of the URL that `gh pr
+create` prints. The same `GITHUB_TOKEN` rule keeps `PR triage` from
+starting on its own ([core ADR-0087](https://github.com/frostyard/core/blob/main/docs/adr/0087-start-pr-triage-by-dispatch-for-bot-pull-requests.md)).
+The dispatched run checks out nothing: core's `levels` step reads the pull
+request by its number, adds 1 level label and, for L1 and L2, `risk:high`.
+A triage dispatch that fails, or a URL with no number, does not change the
+status: the script prints a `::warning::` and adds the manual command to the
+row. A dry run, `pr-exists` and `pr-failed` start no triage.
+
 A bump branch always starts at the tap's ref at the start of the run, never at
 another item's branch, and the tap is restored to that ref after each item. An
 existing remote branch or an open pull request with the same head is
@@ -122,9 +134,11 @@ on a `workflow_dispatch` of a bump branch: `mise` installs Python 3.12.16 from
 [`.github/scripts/`](../../.github/scripts/).
 
 The dispatch is how a bump pull request gets its `Test` and `test-bot` checks.
-`PR triage` ([`risk-paths.yml`](../../.github/workflows/risk-paths.yml)) is not
-started by a dispatch: it runs at the first label, edit or reopen from a person
-or the machine account. It runs on `pull_request_target`, which GitHub blocks
+`PR triage` ([`risk-paths.yml`](../../.github/workflows/risk-paths.yml)) runs
+at the first label, edit or reopen from a person or the machine account. Until
+then, the bump pull request has the level label of the dispatched run of
+`PR triage dispatch`, which runs only `levels` (core `docs/specs/pr-triage.md`
+rule A2). Both callers pin the same core commit and comment. It runs on `pull_request_target`, which GitHub blocks
 by default in a public repository from 2026-12-02. An Actions policy of the
 frostyard organization allows that event for the caller path only
 ([core: pull_request_target policy](https://github.com/frostyard/core/blob/main/docs/design/pull-request-target-policy.md));
