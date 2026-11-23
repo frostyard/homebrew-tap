@@ -1,0 +1,35 @@
+# PR triage by dispatch (core ADR-0087, docs/specs/pr-triage.md rule A2): a
+# pull request that GITHUB_TOKEN opens starts no run of the caller in
+# risk-paths.yml, so .github/scripts/bump_casks.py starts this workflow with
+# `gh workflow run` after it opens a bump pull request. Only `levels` runs on
+# this event: it reads the pull request by its number, adds 1 level label and,
+# for L1 and L2, risk:high. It checks out nothing and runs no code from the
+# pull request. It pins the same core commit as risk-paths.yml (core ADR-0021).
+name: PR triage dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: The number of the pull request to triage
+        required: true
+        type: string
+
+permissions: {}
+
+# Explicit bash runs every step with -eo pipefail. Without it, GitHub runs
+# `bash -e` with no pipefail, so `cmd | tee` takes tee's status and a
+# failed command passes.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-triage:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: frostyard/core/.github/workflows/pr-triage.yml@f99acfddee0a5466990b72e6292a5b1642444a25 # frostyard/core main, 2026-11-22 (core#288)
+    with:
+      pr: ${{ inputs.pr }}
+      dependabot-shadow: false

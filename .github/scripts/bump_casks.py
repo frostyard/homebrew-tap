@@ -16,6 +16,7 @@ For every file in ``Casks/*.rb`` and ``Formula/*.rb`` the script:
 9. unless ``--dry-run``: pushes ``bump/<token>-<new>``, opens one PR into
    the base ref, and then starts ``ci.yml`` and ``tests.yml`` on that branch
    with ``workflow_dispatch``, so the PR gets its checks.
+   It also dispatches PR triage on the base ref to label the PR by number.
 
 The script never pushes to the base ref itself. It needs the ``gh`` CLI, ``git``
 and ``brew`` on PATH. Only the Python standard library is used otherwise.
@@ -44,6 +45,10 @@ TAP_SLUG = "frostyard/homebrew-tap"
 # GITHUB_TOKEN opens starts no pull_request run, but a workflow_dispatch from
 # GITHUB_TOKEN does (issue #42).
 CHECK_WORKFLOWS = ("ci.yml", "tests.yml")
+# The dispatch caller of core's PR triage (docs/specs/pr-triage.md rule A2,
+# core ADR-0087) runs from the base ref and reads the PR by number.
+TRIAGE_WORKFLOW = "pr-triage-dispatch.yml"
+PR_NUMBER_RE = re.compile(r"/pull/([1-9][0-9]*)$")
 
 SHA256_RE = re.compile(r"\b([0-9a-fA-F]{64})\b")
 SOURCE_URL_RE = re.compile(
@@ -182,9 +187,14 @@ class GhClient:
             ]
         ).strip()
 
-    def dispatch_workflow(self, slug: str, workflow: str, ref: str) -> None:
+    def dispatch_workflow(
+        self, slug: str, workflow: str, ref: str, inputs: Mapping[str, str] | None = None
+    ) -> None:
         """Start one workflow on ``ref``; raise ``RuntimeError`` on failure."""
-        self._runner(["gh", "workflow", "run", workflow, "--repo", slug, "--ref", ref])
+        argv = ["gh", "workflow", "run", workflow, "--repo", slug, "--ref", ref]
+        for key, value in (inputs or {}).items():
+            argv.extend(["-f", f"{key}={value}"])
+        self._runner(argv)
 
     def verify_attestation(self, path: Path, slug: str, tag: str) -> None:
         """Raise ``BumpError`` unless the attestation of ``path`` comes from ``tag``."""
@@ -512,6 +522,7 @@ def publish(
     so after the PR exists the function starts every workflow of
     ``CHECK_WORKFLOWS`` on the branch with ``workflow_dispatch``. A dispatched
     run attaches its checks to the head commit, which is the commit of the PR.
+    PR triage is also dispatched on the base ref to label the PR by number.
     """
     branch = f"bump/{item}-{new_version}"
     relative = str(path.relative_to(bumper.tap_dir))
@@ -552,31 +563,51 @@ def publish(
             bumper.gh.dispatch_workflow(bumper.tap_slug, workflow, branch)
         except RuntimeError as error:
             failures.append((workflow, str(error)))
+    status = "bumped"
+    detail = f"PR into {bumper.base_ref}: {url}"
     if failures:
-        restore_tap(bumper)
+        status = "dispatch-failed"
         named = ", ".join(f"{workflow}: {error}" for workflow, error in failures)
         manual = "; ".join(
             f"gh workflow run {workflow} --repo {bumper.tap_slug} --ref {branch}" for workflow, _ in failures
         )
-        return ItemResult(
-            item=item,
-            status="dispatch-failed",
-            current=old_version,
-            latest=new_version,
-            detail=(
-                f"PR into {bumper.base_ref}: {url}; the checks did not start: "
-                f"{named}. Start them by hand: {manual}"
-            ),
-        )
-
+        detail = f"{detail}; the checks did not start: {named}. Start them by hand: {manual}"
+    note = start_triage(bumper, item, url)
+    if note:
+        detail = f"{detail}; {note}"
     restore_tap(bumper)
     return ItemResult(
         item=item,
-        status="bumped",
+        status=status,
         current=old_version,
         latest=new_version,
-        detail=f"PR into {bumper.base_ref}: {url}",
+        detail=detail,
     )
+
+
+def pr_number(url: str) -> str | None:
+    """Read a positive PR number from the end of a PR URL."""
+    found = PR_NUMBER_RE.search(url.strip())
+    return found.group(1) if found else None
+
+
+def start_triage(bumper: Bumper, item: str, url: str) -> str:
+    """Dispatch trusted base-ref triage; warn without changing the bump status."""
+    number = pr_number(url)
+    note = ""
+    if number is None:
+        note = f"PR triage did not start: cannot read the PR number from {url!r}"
+    else:
+        try:
+            bumper.gh.dispatch_workflow(bumper.tap_slug, TRIAGE_WORKFLOW, bumper.base_ref, {"pr": number})
+        except RuntimeError as error:
+            note = (
+                f"PR triage did not start: {error}. Start it by hand: gh workflow run "
+                f"{TRIAGE_WORKFLOW} --repo {bumper.tap_slug} --ref {bumper.base_ref} -f pr={number}"
+            )
+    if note:
+        print(f"::warning::{item}: {note}")
+    return note
 
 
 def pr_body(item: str, kind: str, old_version: str, new_version: str, hash_map: Mapping[str, str]) -> str:
